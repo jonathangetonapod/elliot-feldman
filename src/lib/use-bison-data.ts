@@ -156,6 +156,8 @@ function calculateDashboardStats(emails: SenderEmail[], domains: DomainHealth[])
     avgReplyRate,
     warmingEmails,
     readyEmails,
+    totalSentLast7Days: totalSent,
+    totalRepliesLast7Days: totalReplies,
   };
 }
 

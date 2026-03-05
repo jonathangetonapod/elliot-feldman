@@ -6,35 +6,65 @@ import { NextRequest, NextResponse } from 'next/server';
  * Proxies requests to the Bison/LeadGenJay API to avoid CORS issues.
  * The API key should be set in the BISON_API_KEY environment variable.
  * 
- * For sender-emails endpoint, automatically fetches ALL pages.
+ * For sender-emails endpoint, automatically fetches ALL pages in PARALLEL.
+ * Bison allows 3000 requests/min, so we can be aggressive.
  */
 
 const BISON_BASE_URL = 'https://send.leadgenjay.com/api';
+const PARALLEL_BATCH_SIZE = 10; // Fetch 10 pages at once
 
-// Fetch all pages of sender emails
-async function fetchAllSenderEmails(apiKey: string): Promise<{ data: any[], meta: any }> {
-  const allEmails: any[] = [];
-  let page = 1;
-  let lastPage = 1;
+// Fetch a single page of sender emails
+async function fetchPage(apiKey: string, page: number): Promise<{ data: any[], meta: any }> {
+  const response = await fetch(`${BISON_BASE_URL}/sender-emails?page=${page}`, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Accept': 'application/json',
+    },
+  });
   
-  do {
-    const response = await fetch(`${BISON_BASE_URL}/sender-emails?page=${page}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Accept': 'application/json',
-      },
-    });
+  if (!response.ok) {
+    throw new Error(`Bison API error: ${response.status}`);
+  }
+  
+  return response.json();
+}
+
+// Fetch all pages of sender emails with PARALLEL processing
+async function fetchAllSenderEmails(apiKey: string): Promise<{ data: any[], meta: any }> {
+  // First, get page 1 to know total pages
+  const firstPage = await fetchPage(apiKey, 1);
+  const totalPages = firstPage.meta?.last_page || 1;
+  const allEmails: any[] = [...(firstPage.data || [])];
+  
+  if (totalPages <= 1) {
+    return {
+      data: allEmails,
+      meta: {
+        total: allEmails.length,
+        current_page: 1,
+        last_page: 1,
+        per_page: allEmails.length,
+      }
+    };
+  }
+  
+  // Fetch remaining pages in parallel batches
+  const remainingPages = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+  
+  for (let i = 0; i < remainingPages.length; i += PARALLEL_BATCH_SIZE) {
+    const batch = remainingPages.slice(i, i + PARALLEL_BATCH_SIZE);
+    const batchResults = await Promise.all(
+      batch.map(page => fetchPage(apiKey, page).catch(err => {
+        console.error(`Failed to fetch page ${page}:`, err);
+        return { data: [], meta: {} };
+      }))
+    );
     
-    if (!response.ok) {
-      throw new Error(`Bison API error: ${response.status}`);
+    for (const result of batchResults) {
+      allEmails.push(...(result.data || []));
     }
-    
-    const data = await response.json();
-    allEmails.push(...(data.data || []));
-    lastPage = data.meta?.last_page || 1;
-    page++;
-  } while (page <= lastPage);
+  }
   
   return {
     data: allEmails,
@@ -70,9 +100,12 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Special handling for sender-emails: fetch ALL pages
+    // Special handling for sender-emails: fetch ALL pages in parallel
     if (endpoint === 'sender-emails') {
+      const startTime = Date.now();
       const data = await fetchAllSenderEmails(apiKey);
+      const duration = Date.now() - startTime;
+      console.log(`Fetched ${data.data.length} sender emails in ${duration}ms`);
       return NextResponse.json(data);
     }
 

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -104,14 +105,32 @@ function hashCode(str: string): number {
 }
 
 export default function EmailsPage() {
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<EmailStatus | "all">("all");
-  const [warmupFilter, setWarmupFilter] = useState<WarmupStatus | "all">("all");
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  
+  // Initialize state from URL params
+  const [search, setSearch] = useState(searchParams.get("search") || "");
+  const [statusFilter, setStatusFilter] = useState<EmailStatus | "all">(
+    (searchParams.get("status") as EmailStatus | "all") || "all"
+  );
+  const [warmupFilter, setWarmupFilter] = useState<WarmupStatus | "all">(
+    (searchParams.get("warmup") as WarmupStatus | "all") || "all"
+  );
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [apiEmails, setApiEmails] = useState<SenderEmail[] | null>(null);
   const [usingMockData, setUsingMockData] = useState(false);
   const pageSize = 25;
+
+  // Update URL when filters change
+  const updateURL = useCallback((newStatus: EmailStatus | "all", newWarmup: WarmupStatus | "all", newSearch: string) => {
+    const params = new URLSearchParams();
+    if (newStatus !== "all") params.set("status", newStatus);
+    if (newWarmup !== "all") params.set("warmup", newWarmup);
+    if (newSearch) params.set("search", newSearch);
+    const queryString = params.toString();
+    router.replace(queryString ? `?${queryString}` : "/emails", { scroll: false });
+  }, [router]);
 
   // Fetch emails from Bison API
   useEffect(() => {
@@ -161,6 +180,49 @@ export default function EmailsPage() {
     
     fetchEmails();
   }, []);
+
+  // Calculate counts for quick filters (before filtering)
+  const filterCounts = useMemo(() => {
+    const allEmails = apiEmails || getEmails({ page: 1, pageSize: 10000 }).data;
+    return {
+      all: allEmails.length,
+      burned: allEmails.filter(e => e.status === "burned").length,
+      warning: allEmails.filter(e => e.status === "warning").length,
+      warming: allEmails.filter(e => e.warmupStatus === "warming").length,
+      ready: allEmails.filter(e => e.warmupStatus === "ready").length,
+    };
+  }, [apiEmails]);
+
+  // Quick filter handlers
+  const handleQuickFilter = (type: "all" | "burned" | "warning" | "warming" | "ready") => {
+    let newStatus: EmailStatus | "all" = "all";
+    let newWarmup: WarmupStatus | "all" = "all";
+    
+    if (type === "burned") {
+      newStatus = "burned";
+    } else if (type === "warning") {
+      newStatus = "warning";
+    } else if (type === "warming") {
+      newWarmup = "warming";
+    } else if (type === "ready") {
+      newWarmup = "ready";
+    }
+    
+    setStatusFilter(newStatus);
+    setWarmupFilter(newWarmup);
+    setPage(1);
+    updateURL(newStatus, newWarmup, search);
+  };
+
+  // Check which quick filter is active
+  const activeQuickFilter = useMemo(() => {
+    if (statusFilter === "burned") return "burned";
+    if (statusFilter === "warning") return "warning";
+    if (warmupFilter === "warming") return "warming";
+    if (warmupFilter === "ready") return "ready";
+    if (statusFilter === "all" && warmupFilter === "all") return "all";
+    return null;
+  }, [statusFilter, warmupFilter]);
 
   // Filter and paginate emails
   const { data: emails, total, totalPages } = useMemo(() => {

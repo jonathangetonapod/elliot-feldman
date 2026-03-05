@@ -63,6 +63,8 @@ export interface DashboardStats {
   avgReplyRate: number;
   warmingEmails: number;
   readyEmails: number;
+  totalSentLast7Days: number;
+  totalRepliesLast7Days: number;
 }
 
 // Seeded random for consistent mock data
@@ -225,6 +227,8 @@ export function getMockDashboardStats(): DashboardStats {
     avgReplyRate,
     warmingEmails,
     readyEmails,
+    totalSentLast7Days: totalSent,
+    totalRepliesLast7Days: totalReplies,
   };
 }
 
