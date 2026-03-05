@@ -12,9 +12,11 @@ import {
   detectStatusTransitions,
   getAllAccountTrends,
   takeSnapshot,
+  getHealthLabel,
   type StatusTransition,
   type AccountTrend,
   type LifespanStats,
+  type TrendHealth,
 } from "@/lib/account-history";
 import { useBisonData } from "@/lib/use-bison-data";
 import {
@@ -135,7 +137,13 @@ export default function TrendsPage() {
   const { emails, loading: bisonLoading, connected } = useBisonData();
   const [mounted, setMounted] = useState(false);
   const [lifespanStats, setLifespanStats] = useState<LifespanStats | null>(null);
-  const [recentlyDegraded, setRecentlyDegraded] = useState<StatusTransition[]>([]);
+  const [recentlyDegraded, setRecentlyDegraded] = useState<Array<{
+    accountId: number;
+    email: string;
+    fromStatus: TrendHealth;
+    toStatus: TrendHealth;
+    percentDrop: number;
+  }>>([]);
   const [atRiskAccounts, setAtRiskAccounts] = useState<ReturnType<typeof predictAtRiskAccounts>>([]);
   const [overallTrend, setOverallTrend] = useState<ReturnType<typeof getOverallReplyRateTrend>>([]);
   const [allTransitions, setAllTransitions] = useState<StatusTransition[]>([]);
@@ -504,44 +512,51 @@ export default function TrendsPage() {
             <CardTitle className="text-base lg:text-lg flex items-center gap-2">
               📉 Recently Degraded
               <Badge variant="outline" className="ml-auto text-xs">
-                Last 7 days
+                Based on trend analysis
               </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent>
             {recentlyDegraded.length > 0 ? (
               <div className="space-y-3">
-                {recentlyDegraded.slice(0, 10).map((transition, index) => (
-                  <div 
-                    key={`${transition.accountId}-${transition.date}`}
-                    className="p-3 rounded-lg border bg-gray-50"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium text-sm truncate">{transition.email}</div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          After {transition.daysInPreviousStatus} day{transition.daysInPreviousStatus !== 1 ? 's' : ''} as {transition.fromStatus}
+                {recentlyDegraded.slice(0, 10).map((item, index) => {
+                  const healthInfo = getHealthLabel(item.toStatus);
+                  return (
+                    <div 
+                      key={`${item.accountId}-${index}`}
+                      className={`p-3 rounded-lg border ${
+                        item.toStatus === 'declining' ? 'bg-red-50 border-red-200' : 'bg-yellow-50 border-yellow-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-sm truncate">{item.email}</div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            Reply rate dropped {item.percentDrop}% from baseline
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className={`text-sm font-medium ${healthInfo.color}`}>
+                            {healthInfo.emoji} {healthInfo.label}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            ↓{item.percentDrop}%
+                          </span>
                         </div>
                       </div>
-                      <div className="flex flex-col items-end gap-1">
-                        <TransitionArrow from={transition.fromStatus} to={transition.toStatus} />
-                        <span className="text-xs text-gray-500">
-                          {new Date(transition.date).toLocaleDateString()}
-                        </span>
-                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {recentlyDegraded.length > 10 && (
                   <div className="text-center text-sm text-gray-500">
-                    +{recentlyDegraded.length - 10} more transitions
+                    +{recentlyDegraded.length - 10} more accounts
                   </div>
                 )}
               </div>
             ) : (
               <div className="text-center py-8 text-gray-500">
                 <span className="text-4xl block mb-2">✨</span>
-                No degradations in the last 7 days
+                No accounts showing decline
               </div>
             )}
           </CardContent>

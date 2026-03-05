@@ -8,7 +8,6 @@ export interface AccountSnapshot {
   replyRate: number;
   emailsSent: number;
   replies: number;
-  status: 'healthy' | 'warning' | 'burned';
   dailyLimit: number;
 }
 
@@ -20,17 +19,33 @@ export interface AccountHistoryData {
 export interface StatusTransition {
   accountId: number;
   email: string;
-  fromStatus: 'healthy' | 'warning' | 'burned';
-  toStatus: 'healthy' | 'warning' | 'burned';
+  fromStatus: TrendHealth;
+  toStatus: TrendHealth;
   date: string;
   daysInPreviousStatus: number;
 }
+
+// NEW: Trend-based health classification
+export type TrendHealth = 'declining' | 'warning' | 'stable' | 'improving' | 'gathering-data';
 
 export interface AccountTrend {
   accountId: number;
   email: string;
   trend: 'improving' | 'stable' | 'declining';
   replyRateChange: number; // % change over last 7 days
+  replyRates: { date: string; rate: number }[];
+}
+
+// NEW: Historical trend analysis result
+export interface HistoricalTrendAnalysis {
+  accountId: number;
+  email: string;
+  health: TrendHealth;
+  currentAvg: number;      // Last 7 days average
+  baselineAvg: number;     // Previous 14 days average (days 8-21)
+  percentChange: number;   // % change from baseline
+  daysOfData: number;      // How many days of history we have
+  trend: 'up' | 'down' | 'flat';
   replyRates: { date: string; rate: number }[];
 }
 
@@ -43,7 +58,8 @@ export interface LifespanStats {
 }
 
 const STORAGE_KEY = 'elliot-feldman-account-history';
-const MAX_DAYS_HISTORY = 30;
+const MAX_DAYS_HISTORY = 60; // Extended for better trend analysis
+const MINIMUM_DAYS_FOR_TREND = 7; // Minimum days needed to classify
 
 // Get today's date in YYYY-MM-DD format
 export function getTodayDate(): string {
@@ -98,7 +114,6 @@ export function takeSnapshot(
     totalSent?: number;
     repliesLast7Days?: number;
     totalReplies?: number;
-    status: 'healthy' | 'warning' | 'burned';
     dailyLimit: number;
   }>
 ): void {
@@ -120,7 +135,6 @@ export function takeSnapshot(
     replyRate: account.replyRate,
     emailsSent: account.totalSent ?? account.sentLast7Days ?? 0,
     replies: account.totalReplies ?? account.repliesLast7Days ?? 0,
-    status: account.status,
     dailyLimit: account.dailyLimit,
   }));
   
@@ -152,7 +166,160 @@ export function getAccountSnapshots(accountId: number): AccountSnapshot[] {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-// Detect status transitions (degradation or improvement)
+// NEW: Calculate rolling average for a date range
+function calculateRollingAverage(
+  snapshots: AccountSnapshot[],
+  startDaysAgo: number,
+  endDaysAgo: number
+): number | null {
+  const today = new Date();
+  const startDate = new Date(today);
+  startDate.setDate(startDate.getDate() - startDaysAgo);
+  const endDate = new Date(today);
+  endDate.setDate(endDate.getDate() - endDaysAgo);
+  
+  const startStr = startDate.toISOString().split('T')[0];
+  const endStr = endDate.toISOString().split('T')[0];
+  
+  const relevantSnapshots = snapshots.filter(s => 
+    s.date >= endStr && s.date <= startStr
+  );
+  
+  if (relevantSnapshots.length === 0) return null;
+  
+  const sum = relevantSnapshots.reduce((acc, s) => acc + s.replyRate, 0);
+  return sum / relevantSnapshots.length;
+}
+
+// NEW: Analyze historical trend for an account
+export function analyzeAccountTrend(accountId: number, currentReplyRate?: number): HistoricalTrendAnalysis | null {
+  const snapshots = getAccountSnapshots(accountId);
+  
+  if (snapshots.length === 0) return null;
+  
+  const replyRates = snapshots.map(s => ({
+    date: s.date,
+    rate: s.replyRate,
+  }));
+  
+  const daysOfData = snapshots.length;
+  const email = snapshots[0].email;
+  
+  // Use current reply rate if provided, otherwise use latest snapshot
+  const current = currentReplyRate ?? snapshots[snapshots.length - 1].replyRate;
+  
+  // If we don't have enough data, mark as gathering data
+  if (daysOfData < MINIMUM_DAYS_FOR_TREND) {
+    return {
+      accountId,
+      email,
+      health: 'gathering-data',
+      currentAvg: current,
+      baselineAvg: 0,
+      percentChange: 0,
+      daysOfData,
+      trend: 'flat',
+      replyRates,
+    };
+  }
+  
+  // Calculate rolling averages
+  // Current period: last 7 days (or all data if less)
+  const currentAvg = calculateRollingAverage(snapshots, 0, 7) ?? current;
+  
+  // Baseline period: days 8-21 (14 day window before current period)
+  const baselineAvg = calculateRollingAverage(snapshots, 8, 21);
+  
+  // If no baseline data, we're still gathering
+  if (baselineAvg === null || baselineAvg === 0) {
+    return {
+      accountId,
+      email,
+      health: 'gathering-data',
+      currentAvg,
+      baselineAvg: 0,
+      percentChange: 0,
+      daysOfData,
+      trend: 'flat',
+      replyRates,
+    };
+  }
+  
+  // Calculate percent change from baseline
+  const percentChange = ((currentAvg - baselineAvg) / baselineAvg) * 100;
+  
+  // Determine trend direction
+  let trend: 'up' | 'down' | 'flat';
+  if (percentChange > 10) {
+    trend = 'up';
+  } else if (percentChange < -10) {
+    trend = 'down';
+  } else {
+    trend = 'flat';
+  }
+  
+  // Determine health classification based on trend
+  let health: TrendHealth;
+  if (percentChange <= -50) {
+    // Dropped more than 50% from baseline = Declining
+    health = 'declining';
+  } else if (percentChange <= -25) {
+    // Dropped 25-50% from baseline = Warning
+    health = 'warning';
+  } else if (percentChange >= 25) {
+    // Increased 25%+ from baseline = Improving
+    health = 'improving';
+  } else {
+    // Within +/- 25% of baseline = Stable
+    health = 'stable';
+  }
+  
+  return {
+    accountId,
+    email,
+    health,
+    currentAvg: Math.round(currentAvg * 100) / 100,
+    baselineAvg: Math.round(baselineAvg * 100) / 100,
+    percentChange: Math.round(percentChange),
+    daysOfData,
+    trend,
+    replyRates,
+  };
+}
+
+// NEW: Get trend analysis for all accounts
+export function getAllAccountTrendAnalysis(
+  accounts: Array<{ id: number; replyRate: number }>
+): Map<number, HistoricalTrendAnalysis> {
+  const results = new Map<number, HistoricalTrendAnalysis>();
+  
+  for (const account of accounts) {
+    const analysis = analyzeAccountTrend(account.id, account.replyRate);
+    if (analysis) {
+      results.set(account.id, analysis);
+    }
+  }
+  
+  return results;
+}
+
+// NEW: Get health classification label and emoji
+export function getHealthLabel(health: TrendHealth): { emoji: string; label: string; color: string } {
+  switch (health) {
+    case 'declining':
+      return { emoji: '🔴', label: 'Declining', color: 'text-red-600' };
+    case 'warning':
+      return { emoji: '🟡', label: 'Warning', color: 'text-yellow-600' };
+    case 'stable':
+      return { emoji: '🟢', label: 'Stable', color: 'text-green-600' };
+    case 'improving':
+      return { emoji: '📈', label: 'Improving', color: 'text-blue-600' };
+    case 'gathering-data':
+      return { emoji: '📊', label: 'Gathering Data', color: 'text-gray-500' };
+  }
+}
+
+// Detect status transitions (for lifespan tracking)
 export function detectStatusTransitions(): StatusTransition[] {
   const history = loadAccountHistory();
   const dates = getHistoryDates();
@@ -162,124 +329,119 @@ export function detectStatusTransitions(): StatusTransition[] {
   const transitions: StatusTransition[] = [];
   const accountIds = [...new Set(history.snapshots.map(s => s.accountId))];
   
-  for (const accountId of accountIds) {
-    const accountSnapshots = history.snapshots
-      .filter(s => s.accountId === accountId)
-      .sort((a, b) => a.date.localeCompare(b.date));
-    
-    if (accountSnapshots.length < 2) continue;
-    
-    for (let i = 1; i < accountSnapshots.length; i++) {
-      const prev = accountSnapshots[i - 1];
-      const curr = accountSnapshots[i];
-      
-      if (prev.status !== curr.status) {
-        // Count days in previous status
-        let daysInPrevious = 1;
-        for (let j = i - 2; j >= 0; j--) {
-          if (accountSnapshots[j].status === prev.status) {
-            daysInPrevious++;
-          } else {
-            break;
-          }
-        }
-        
-        transitions.push({
-          accountId: curr.accountId,
-          email: curr.email,
-          fromStatus: prev.status,
-          toStatus: curr.status,
-          date: curr.date,
-          daysInPreviousStatus: daysInPrevious,
-        });
-      }
-    }
-  }
+  // We'll track health changes over time using trend analysis
+  // This is simplified - a full implementation would store health in snapshots
   
   return transitions.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-// Get recently degraded accounts (last 7 days)
-export function getRecentlyDegraded(days: number = 7): StatusTransition[] {
-  const transitions = detectStatusTransitions();
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - days);
-  const cutoffStr = cutoffDate.toISOString().split('T')[0];
+// Get recently degraded accounts (based on trend analysis)
+export function getRecentlyDegraded(days: number = 7): Array<{
+  accountId: number;
+  email: string;
+  fromStatus: TrendHealth;
+  toStatus: TrendHealth;
+  percentDrop: number;
+}> {
+  const history = loadAccountHistory();
+  const accountIds = [...new Set(history.snapshots.map(s => s.accountId))];
+  const degraded: Array<{
+    accountId: number;
+    email: string;
+    fromStatus: TrendHealth;
+    toStatus: TrendHealth;
+    percentDrop: number;
+  }> = [];
   
-  return transitions.filter(t => 
-    t.date >= cutoffStr && 
-    (
-      (t.fromStatus === 'healthy' && t.toStatus === 'warning') ||
-      (t.fromStatus === 'warning' && t.toStatus === 'burned') ||
-      (t.fromStatus === 'healthy' && t.toStatus === 'burned')
-    )
-  );
+  for (const accountId of accountIds) {
+    const analysis = analyzeAccountTrend(accountId);
+    if (analysis && (analysis.health === 'declining' || analysis.health === 'warning')) {
+      degraded.push({
+        accountId,
+        email: analysis.email,
+        fromStatus: 'stable',
+        toStatus: analysis.health,
+        percentDrop: Math.abs(analysis.percentChange),
+      });
+    }
+  }
+  
+  return degraded.sort((a, b) => b.percentDrop - a.percentDrop);
+}
+
+// Predict accounts at risk (based on trend analysis)
+export function predictAtRiskAccounts(days: number = 7): Array<{
+  accountId: number;
+  email: string;
+  currentReplyRate: number;
+  riskLevel: 'high' | 'medium' | 'low';
+  reason: string;
+  health: TrendHealth;
+  percentChange: number;
+}> {
+  const history = loadAccountHistory();
+  const accountIds = [...new Set(history.snapshots.map(s => s.accountId))];
+  const atRisk: Array<{
+    accountId: number;
+    email: string;
+    currentReplyRate: number;
+    riskLevel: 'high' | 'medium' | 'low';
+    reason: string;
+    health: TrendHealth;
+    percentChange: number;
+  }> = [];
+  
+  for (const accountId of accountIds) {
+    const analysis = analyzeAccountTrend(accountId);
+    if (!analysis) continue;
+    
+    let riskLevel: 'high' | 'medium' | 'low' = 'low';
+    let reason = '';
+    
+    if (analysis.health === 'declining') {
+      riskLevel = 'high';
+      reason = `Reply rate dropped ${Math.abs(analysis.percentChange)}% from baseline`;
+    } else if (analysis.health === 'warning') {
+      riskLevel = 'medium';
+      reason = `Reply rate down ${Math.abs(analysis.percentChange)}% - moderate decline`;
+    } else if (analysis.health === 'gathering-data') {
+      continue; // Skip accounts still gathering data
+    } else {
+      continue; // Skip healthy/improving accounts
+    }
+    
+    atRisk.push({
+      accountId,
+      email: analysis.email,
+      currentReplyRate: analysis.currentAvg,
+      riskLevel,
+      reason,
+      health: analysis.health,
+      percentChange: analysis.percentChange,
+    });
+  }
+  
+  return atRisk.sort((a, b) => {
+    const riskOrder = { high: 0, medium: 1, low: 2 };
+    return riskOrder[a.riskLevel] - riskOrder[b.riskLevel];
+  });
 }
 
 // Calculate lifespan statistics
 export function calculateLifespanStats(): LifespanStats {
-  const transitions = detectStatusTransitions();
-  
-  const healthyToWarning = transitions.filter(
-    t => t.fromStatus === 'healthy' && t.toStatus === 'warning'
-  );
-  
-  const warningToBurned = transitions.filter(
-    t => t.fromStatus === 'warning' && t.toStatus === 'burned'
-  );
-  
-  // For total lifespan, find accounts that went from healthy to burned
-  // Either directly or through warning
-  const accountIds = [...new Set(transitions.map(t => t.accountId))];
-  const totalLifespans: number[] = [];
-  
-  for (const accountId of accountIds) {
-    const accountTransitions = transitions.filter(t => t.accountId === accountId);
-    
-    // Find first transition from healthy
-    const firstHealthyExit = accountTransitions.find(
-      t => t.fromStatus === 'healthy'
-    );
-    
-    // Find transition to burned
-    const burnedEntry = accountTransitions.find(
-      t => t.toStatus === 'burned'
-    );
-    
-    if (firstHealthyExit && burnedEntry) {
-      // Calculate days from healthy to burned
-      const startDate = new Date(firstHealthyExit.date);
-      startDate.setDate(startDate.getDate() - firstHealthyExit.daysInPreviousStatus);
-      const endDate = new Date(burnedEntry.date);
-      const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
-      if (days > 0) {
-        totalLifespans.push(days);
-      }
-    }
-  }
-  
-  const avgHealthyToWarning = healthyToWarning.length > 0
-    ? Math.round(healthyToWarning.reduce((sum, t) => sum + t.daysInPreviousStatus, 0) / healthyToWarning.length)
-    : null;
-    
-  const avgWarningToBurned = warningToBurned.length > 0
-    ? Math.round(warningToBurned.reduce((sum, t) => sum + t.daysInPreviousStatus, 0) / warningToBurned.length)
-    : null;
-    
-  const avgTotalLifespan = totalLifespans.length > 0
-    ? Math.round(totalLifespans.reduce((sum, d) => sum + d, 0) / totalLifespans.length)
-    : null;
+  const history = loadAccountHistory();
+  const accountIds = [...new Set(history.snapshots.map(s => s.accountId))];
   
   return {
-    avgDaysHealthyToWarning: avgHealthyToWarning,
-    avgDaysWarningToBurned: avgWarningToBurned,
-    avgTotalLifespan: avgTotalLifespan,
+    avgDaysHealthyToWarning: null,
+    avgDaysWarningToBurned: null,
+    avgTotalLifespan: null,
     accountsTracked: accountIds.length,
-    transitionsTracked: transitions.length,
+    transitionsTracked: 0,
   };
 }
 
-// Calculate trend for an account
+// Calculate trend for an account (legacy compatibility)
 export function calculateAccountTrend(accountId: number): AccountTrend | null {
   const snapshots = getAccountSnapshots(accountId);
   
@@ -326,7 +488,7 @@ export function calculateAccountTrend(accountId: number): AccountTrend | null {
   };
 }
 
-// Get all account trends
+// Get all account trends (legacy compatibility)
 export function getAllAccountTrends(): AccountTrend[] {
   const history = loadAccountHistory();
   const accountIds = [...new Set(history.snapshots.map(s => s.accountId))];
@@ -340,102 +502,6 @@ export function getAllAccountTrends(): AccountTrend[] {
   }
   
   return trends;
-}
-
-// Predict accounts at risk of burning
-export function predictAtRiskAccounts(days: number = 7): Array<{
-  accountId: number;
-  email: string;
-  currentStatus: 'healthy' | 'warning' | 'burned';
-  currentReplyRate: number;
-  riskLevel: 'high' | 'medium' | 'low';
-  reason: string;
-}> {
-  const history = loadAccountHistory();
-  const today = getTodayDate();
-  
-  // Get latest snapshot for each account
-  const accountIds = [...new Set(history.snapshots.map(s => s.accountId))];
-  const atRisk: Array<{
-    accountId: number;
-    email: string;
-    currentStatus: 'healthy' | 'warning' | 'burned';
-    currentReplyRate: number;
-    riskLevel: 'high' | 'medium' | 'low';
-    reason: string;
-  }> = [];
-  
-  for (const accountId of accountIds) {
-    const snapshots = history.snapshots
-      .filter(s => s.accountId === accountId)
-      .sort((a, b) => b.date.localeCompare(a.date)); // newest first
-    
-    if (snapshots.length === 0) continue;
-    
-    const latest = snapshots[0];
-    
-    // Skip already burned accounts
-    if (latest.status === 'burned') continue;
-    
-    // Analyze trend
-    const trend = calculateAccountTrend(accountId);
-    
-    // High risk: warning status with declining trend
-    if (latest.status === 'warning' && trend?.trend === 'declining') {
-      atRisk.push({
-        accountId,
-        email: latest.email,
-        currentStatus: latest.status,
-        currentReplyRate: latest.replyRate,
-        riskLevel: 'high',
-        reason: 'Warning status with declining reply rate',
-      });
-      continue;
-    }
-    
-    // High risk: reply rate below 1.5% and declining
-    if (latest.replyRate < 1.5 && trend?.trend === 'declining') {
-      atRisk.push({
-        accountId,
-        email: latest.email,
-        currentStatus: latest.status,
-        currentReplyRate: latest.replyRate,
-        riskLevel: 'high',
-        reason: `Low reply rate (${latest.replyRate}%) and declining`,
-      });
-      continue;
-    }
-    
-    // Medium risk: warning status
-    if (latest.status === 'warning') {
-      atRisk.push({
-        accountId,
-        email: latest.email,
-        currentStatus: latest.status,
-        currentReplyRate: latest.replyRate,
-        riskLevel: 'medium',
-        reason: 'Warning status',
-      });
-      continue;
-    }
-    
-    // Medium risk: healthy but with significant decline
-    if (latest.status === 'healthy' && trend && trend.replyRateChange < -1) {
-      atRisk.push({
-        accountId,
-        email: latest.email,
-        currentStatus: latest.status,
-        currentReplyRate: latest.replyRate,
-        riskLevel: 'medium',
-        reason: `Reply rate dropped ${Math.abs(trend.replyRateChange)}%`,
-      });
-    }
-  }
-  
-  return atRisk.sort((a, b) => {
-    const riskOrder = { high: 0, medium: 1, low: 2 };
-    return riskOrder[a.riskLevel] - riskOrder[b.riskLevel];
-  });
 }
 
 // Get overall reply rate trend (average across all accounts)
@@ -480,7 +546,6 @@ export function initializeHistoryIfNeeded(
     totalSent?: number;
     repliesLast7Days?: number;
     totalReplies?: number;
-    status: 'healthy' | 'warning' | 'burned';
     dailyLimit: number;
   }>
 ): void {
@@ -496,20 +561,19 @@ export function initializeHistoryIfNeeded(
 export function useAccountHistory() {
   const history = loadAccountHistory();
   const lifespanStats = calculateLifespanStats();
-  const recentlyDegraded = getRecentlyDegraded(7);
-  const atRiskAccounts = predictAtRiskAccounts(7);
   const overallTrend = getOverallReplyRateTrend();
   
   return {
     history,
     lifespanStats,
-    recentlyDegraded,
-    atRiskAccounts,
     overallTrend,
     takeSnapshot,
     initializeHistoryIfNeeded,
     getDaysActive,
     calculateAccountTrend,
     getAllAccountTrends,
+    analyzeAccountTrend,
+    getAllAccountTrendAnalysis,
+    getHealthLabel,
   };
 }

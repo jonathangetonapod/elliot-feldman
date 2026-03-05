@@ -3,18 +3,21 @@
 import { useState, useEffect, useMemo, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { getEmails, type EmailStatus, type WarmupStatus, type SenderEmail } from "@/lib/mock-data";
+import { getEmails, type WarmupStatus, type SenderEmail } from "@/lib/mock-data";
 import { toast } from "sonner";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import {
   takeSnapshot,
   calculateAccountTrend,
   getDaysActive,
+  analyzeAccountTrend,
+  getHealthLabel,
   type AccountTrend,
+  type TrendHealth,
+  type HistoricalTrendAnalysis,
 } from "@/lib/account-history";
 
 interface BisonSenderEmail {
@@ -33,7 +36,7 @@ interface BisonSenderEmail {
 }
 
 // Transform Bison API data to our SenderEmail format
-function transformBisonEmail(bisonEmail: BisonSenderEmail): SenderEmail {
+function transformBisonEmail(bisonEmail: BisonSenderEmail): DisplayEmail {
   const emailParts = bisonEmail.email.split("@");
   const domain = emailParts[1] || "unknown.com";
   
@@ -69,27 +72,12 @@ function transformBisonEmail(bisonEmail: BisonSenderEmail): SenderEmail {
     replyRate = 0;
   }
   
-  // Determine health status based on reply rate
-  let status: EmailStatus;
-  if (bisonEmail.status === "disconnected") {
-    status = "burned";
-  } else if (replyRate >= 2) {
-    status = "healthy";
-  } else if (replyRate >= 1) {
-    status = "warning";
-  } else if (emailsSent === 0) {
-    // New accounts with no sends are neutral (warning)
-    status = "warning";
-  } else {
-    status = "burned";
-  }
-  
   return {
     id: bisonEmail.id,
     email: bisonEmail.email,
     name: bisonEmail.name || bisonEmail.email.split("@")[0],
     domain,
-    status,
+    status: "healthy", // Will be overwritten by trend analysis
     warmupStatus,
     warmupDay,
     warmupReadyDate: warmupReadyDate.toISOString().split("T")[0],
@@ -106,7 +94,8 @@ function transformBisonEmail(bisonEmail: BisonSenderEmail): SenderEmail {
     totalReplies: uniqueReplies,
     createdAt: bisonEmail.created_at,
     daysActive: daysSinceCreation,
-  } as DisplayEmail;
+    trendAnalysis: null, // Will be populated after
+  };
 }
 
 // Extended type for display
@@ -117,6 +106,7 @@ type DisplayEmail = SenderEmail & {
   createdAt?: string;
   daysActive?: number;
   trend?: AccountTrend | null;
+  trendAnalysis?: HistoricalTrendAnalysis | null;
 };
 
 // Mini Sparkline component for reply rate history
@@ -153,24 +143,70 @@ function MiniSparkline({ data, width = 60, height = 20 }: { data: number[]; widt
   );
 }
 
-// Trend indicator for accounts
-function AccountTrendIndicator({ trend }: { trend: AccountTrend | null | undefined }) {
-  if (!trend) {
+// NEW: Trend-based health indicator
+function TrendHealthIndicator({ analysis }: { analysis: HistoricalTrendAnalysis | null | undefined }) {
+  if (!analysis) {
+    return (
+      <div className="flex flex-col items-center gap-1">
+        <span className="text-gray-400 text-sm">📊</span>
+        <span className="text-xs text-gray-400">No data</span>
+      </div>
+    );
+  }
+  
+  const { emoji, label, color } = getHealthLabel(analysis.health);
+  
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <span className="text-lg">{emoji}</span>
+      <span className={`text-xs font-medium ${color}`}>{label}</span>
+    </div>
+  );
+}
+
+// NEW: Trend change display (Was X% → Now Y%)
+function TrendChangeDisplay({ analysis, compact = false }: { analysis: HistoricalTrendAnalysis | null | undefined; compact?: boolean }) {
+  if (!analysis) {
     return <span className="text-xs text-gray-400">—</span>;
   }
   
-  const config = {
-    improving: { icon: '↑', color: 'text-green-600' },
-    stable: { icon: '→', color: 'text-gray-500' },
-    declining: { icon: '↓', color: 'text-red-600' },
-  };
+  if (analysis.health === 'gathering-data') {
+    return (
+      <div className={`${compact ? 'text-xs' : 'text-sm'} text-gray-500`}>
+        <span className="text-gray-400">
+          {analysis.daysOfData} day{analysis.daysOfData !== 1 ? 's' : ''} of data
+        </span>
+        <span className="text-gray-300 mx-1">•</span>
+        <span>Need 7+ days</span>
+      </div>
+    );
+  }
   
-  const { icon, color } = config[trend.trend];
+  const changeIcon = analysis.percentChange > 0 ? '↑' : analysis.percentChange < 0 ? '↓' : '→';
+  const changeColor = analysis.percentChange > 0 ? 'text-green-600' : analysis.percentChange < 0 ? 'text-red-600' : 'text-gray-500';
+  
+  if (compact) {
+    return (
+      <div className="text-xs">
+        <span className="text-gray-500">{analysis.baselineAvg}%</span>
+        <span className="text-gray-300 mx-1">→</span>
+        <span className={changeColor}>{analysis.currentAvg}%</span>
+        <span className={`ml-1 ${changeColor}`}>
+          ({changeIcon}{Math.abs(analysis.percentChange)}%)
+        </span>
+      </div>
+    );
+  }
   
   return (
-    <span className={`text-sm font-medium ${color}`} title={`${trend.replyRateChange > 0 ? '+' : ''}${trend.replyRateChange}%`}>
-      {icon}
-    </span>
+    <div className="text-sm">
+      <div className="text-gray-500 mb-1">
+        Was <span className="font-medium">{analysis.baselineAvg}%</span> avg (14d)
+      </div>
+      <div className={changeColor}>
+        Now <span className="font-medium">{analysis.currentAvg}%</span> (7d) = {changeIcon}{Math.abs(analysis.percentChange)}%
+      </div>
+    </div>
   );
 }
 
@@ -188,8 +224,8 @@ function ReplyRateBar({ rate, hasSends }: { rate: number; hasSends: boolean }) {
   }
   
   const percentage = Math.min(rate * 20, 100); // Scale: 5% = 100% bar width
-  const color = rate < 1 ? "bg-red-500" : rate < 2 ? "bg-yellow-500" : "bg-green-500";
-  const emoji = rate < 1 ? "🔴" : rate < 2 ? "🟡" : "🟢";
+  // Use neutral colors - health is now shown separately via trend analysis
+  const color = "bg-blue-500";
   
   return (
     <div className="flex items-center gap-2">
@@ -199,8 +235,8 @@ function ReplyRateBar({ rate, hasSends }: { rate: number; hasSends: boolean }) {
           style={{ width: `${percentage}%` }}
         />
       </div>
-      <span className={`text-sm font-semibold ${rate < 1 ? "text-red-600" : rate < 2 ? "text-yellow-600" : "text-green-600"}`}>
-        {emoji} {rate}%
+      <span className="text-sm font-medium text-gray-700">
+        {rate}%
       </span>
     </div>
   );
@@ -252,24 +288,14 @@ function WarmupStageIndicator({ dailyLimit, warmupEnabled }: { dailyLimit: numbe
   );
 }
 
-// Status Icon Component
-function StatusIcon({ status }: { status: EmailStatus }) {
-  switch (status) {
-    case "healthy":
-      return <span className="text-2xl" title="Healthy">✅</span>;
-    case "warning":
-      return <span className="text-2xl" title="Warning">⚠️</span>;
-    case "burned":
-      return <span className="text-2xl" title="Burned">🔴</span>;
-  }
-}
-
-// Mini Pie Chart for Account Health
-function MiniHealthPie({ stats }: { stats: { healthy: number; warning: number; burned: number } }) {
+// Mini Pie Chart for Account Health - Updated for trend-based health
+function MiniHealthPie({ stats }: { stats: { declining: number; warning: number; stable: number; improving: number; gatheringData: number } }) {
   const data = [
-    { name: "Healthy", value: stats.healthy, color: "#22c55e" },
+    { name: "Stable", value: stats.stable, color: "#22c55e" },
+    { name: "Improving", value: stats.improving, color: "#3b82f6" },
     { name: "Warning", value: stats.warning, color: "#eab308" },
-    { name: "Burned", value: stats.burned, color: "#ef4444" },
+    { name: "Declining", value: stats.declining, color: "#ef4444" },
+    { name: "Gathering Data", value: stats.gatheringData, color: "#9ca3af" },
   ].filter(d => d.value > 0);
   
   return (
@@ -302,8 +328,8 @@ function EmailsPageContent() {
   
   // Initialize state from URL params
   const [search, setSearch] = useState(searchParams.get("search") || "");
-  const [statusFilter, setStatusFilter] = useState<EmailStatus | "all">(
-    (searchParams.get("status") as EmailStatus | "all") || "all"
+  const [healthFilter, setHealthFilter] = useState<TrendHealth | "all">(
+    (searchParams.get("health") as TrendHealth | "all") || "all"
   );
   const [warmupFilter, setWarmupFilter] = useState<"on" | "off" | "all">(
     (searchParams.get("warmup") as "on" | "off" | "all") || "all"
@@ -318,6 +344,7 @@ function EmailsPageContent() {
   const [loading, setLoading] = useState(true);
   const [apiEmails, setApiEmails] = useState<DisplayEmail[] | null>(null);
   const [usingMockData, setUsingMockData] = useState(false);
+  const [trendAnalysisMap, setTrendAnalysisMap] = useState<Map<number, HistoricalTrendAnalysis>>(new Map());
   
   // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -326,14 +353,14 @@ function EmailsPageContent() {
 
   // Update URL when filters change
   const updateURL = useCallback((
-    newStatus: EmailStatus | "all", 
+    newHealth: TrendHealth | "all", 
     newWarmup: "on" | "off" | "all", 
     newSearch: string,
     newSort: string,
     newOrder: string
   ) => {
     const params = new URLSearchParams();
-    if (newStatus !== "all") params.set("status", newStatus);
+    if (newHealth !== "all") params.set("health", newHealth);
     if (newWarmup !== "all") params.set("warmup", newWarmup);
     if (newSearch) params.set("search", newSearch);
     if (newSort !== "replyRate") params.set("sort", newSort);
@@ -404,15 +431,24 @@ function EmailsPageContent() {
       totalSent: e.totalSent,
       repliesLast7Days: e.repliesLast7Days,
       totalReplies: e.totalReplies,
-      status: e.status,
       dailyLimit: e.dailyLimit,
     }));
     
     // Take snapshot (will only save once per day)
     takeSnapshot(accountData);
+    
+    // Calculate trend analysis for all accounts
+    const analysisMap = new Map<number, HistoricalTrendAnalysis>();
+    for (const email of apiEmails) {
+      const analysis = analyzeAccountTrend(email.id, email.replyRate);
+      if (analysis) {
+        analysisMap.set(email.id, analysis);
+      }
+    }
+    setTrendAnalysisMap(analysisMap);
   }, [loading, apiEmails]);
 
-  // Calculate stats for the summary bar
+  // Calculate stats for the summary bar - now trend-based
   const summaryStats = useMemo(() => {
     const allEmails = apiEmails || getEmails({ page: 1, pageSize: 10000 }).data;
     
@@ -425,56 +461,82 @@ function EmailsPageContent() {
       ? emailsWithSends.reduce((sum, e) => sum + e.replyRate, 0) / emailsWithSends.length
       : 0;
     
-    const atRisk = allEmails.filter(e => e.replyRate < 1 && (e.sentLast7Days > 0 || ((e as DisplayEmail).totalSent ?? 0) > 0)).length;
-    const performing = allEmails.filter(e => e.replyRate >= 2).length;
+    // Count by trend-based health
+    let declining = 0;
+    let warning = 0;
+    let stable = 0;
+    let improving = 0;
+    let gatheringData = 0;
+    
+    for (const email of allEmails) {
+      const analysis = trendAnalysisMap.get(email.id);
+      if (!analysis) {
+        gatheringData++;
+      } else {
+        switch (analysis.health) {
+          case 'declining': declining++; break;
+          case 'warning': warning++; break;
+          case 'stable': stable++; break;
+          case 'improving': improving++; break;
+          case 'gathering-data': gatheringData++; break;
+        }
+      }
+    }
     
     return {
       total: allEmails.length,
       warmupOn,
       warmupOff,
       avgReplyRate: Math.round(avgReplyRate * 100) / 100,
-      atRisk,
-      performing,
+      declining,
+      warning,
+      stable,
+      improving,
+      gatheringData,
     };
-  }, [apiEmails]);
+  }, [apiEmails, trendAnalysisMap]);
 
   // Calculate counts for quick filters (before filtering)
   const filterCounts = useMemo(() => {
     const allEmails = apiEmails || getEmails({ page: 1, pageSize: 10000 }).data;
-    return {
-      all: allEmails.length,
-      burned: allEmails.filter(e => e.status === "burned").length,
-      warning: allEmails.filter(e => e.status === "warning").length,
-      healthy: allEmails.filter(e => e.status === "healthy").length,
-      atRisk: allEmails.filter(e => e.replyRate < 1 && (e.sentLast7Days > 0 || ((e as DisplayEmail).totalSent ?? 0) > 0)).length,
-    };
-  }, [apiEmails]);
-
-  // Quick filter handlers
-  const handleQuickFilter = (type: "all" | "burned" | "warning" | "healthy" | "atRisk") => {
-    let newStatus: EmailStatus | "all" = "all";
     
-    if (type === "burned") {
-      newStatus = "burned";
-    } else if (type === "warning") {
-      newStatus = "warning";
-    } else if (type === "healthy") {
-      newStatus = "healthy";
+    let declining = 0;
+    let warning = 0;
+    let stable = 0;
+    let improving = 0;
+    let gatheringData = 0;
+    
+    for (const email of allEmails) {
+      const analysis = trendAnalysisMap.get(email.id);
+      if (!analysis) {
+        gatheringData++;
+      } else {
+        switch (analysis.health) {
+          case 'declining': declining++; break;
+          case 'warning': warning++; break;
+          case 'stable': stable++; break;
+          case 'improving': improving++; break;
+          case 'gathering-data': gatheringData++; break;
+        }
+      }
     }
     
-    setStatusFilter(newStatus);
-    setPage(1);
-    updateURL(newStatus, warmupFilter, search, sortBy, sortOrder);
-  };
+    return {
+      all: allEmails.length,
+      declining,
+      warning,
+      stable,
+      improving,
+      gatheringData,
+    };
+  }, [apiEmails, trendAnalysisMap]);
 
-  // Check which quick filter is active
-  const activeQuickFilter = useMemo(() => {
-    if (statusFilter === "burned") return "burned";
-    if (statusFilter === "warning") return "warning";
-    if (statusFilter === "healthy") return "healthy";
-    if (statusFilter === "all" && warmupFilter === "all") return "all";
-    return null;
-  }, [statusFilter, warmupFilter]);
+  // Quick filter handlers
+  const handleQuickFilter = (type: TrendHealth | "all") => {
+    setHealthFilter(type);
+    setPage(1);
+    updateURL(type, warmupFilter, search, sortBy, sortOrder);
+  };
 
   // Filter and paginate emails
   const { data: emails, total, totalPages, filteredEmails: allFilteredEmails } = useMemo(() => {
@@ -484,7 +546,7 @@ function EmailsPageContent() {
         page,
         pageSize,
         search,
-        status: statusFilter,
+        status: healthFilter === "declining" ? "burned" : healthFilter === "warning" ? "warning" : healthFilter === "stable" || healthFilter === "improving" ? "healthy" : "all",
         warmupStatus: warmupFilter === "on" ? "ready" : warmupFilter === "off" ? "paused" : "all",
         sortBy: "replyRate",
         sortOrder: "asc",
@@ -505,9 +567,13 @@ function EmailsPageContent() {
       );
     }
     
-    // Status filter
-    if (statusFilter !== "all") {
-      filteredEmails = filteredEmails.filter((e) => e.status === statusFilter);
+    // Health filter (trend-based)
+    if (healthFilter !== "all") {
+      filteredEmails = filteredEmails.filter((e) => {
+        const analysis = trendAnalysisMap.get(e.id);
+        if (!analysis) return healthFilter === "gathering-data";
+        return analysis.health === healthFilter;
+      });
     }
     
     // Warmup filter (ON/OFF based on warmup_enabled)
@@ -544,7 +610,7 @@ function EmailsPageContent() {
     const data = filteredEmails.slice(start, start + pageSize);
     
     return { data, total, page, pageSize, totalPages, filteredEmails };
-  }, [apiEmails, page, pageSize, search, statusFilter, warmupFilter, sortBy, sortOrder]);
+  }, [apiEmails, page, pageSize, search, healthFilter, warmupFilter, sortBy, sortOrder, trendAnalysisMap]);
 
   // Selection handlers
   const toggleSelectEmail = useCallback((id: number) => {
@@ -601,17 +667,24 @@ function EmailsPageContent() {
     const selectedEmails = allEmails.filter(e => selectedIds.has(e.id)) as DisplayEmail[];
     
     // Generate CSV
-    const headers = ["Email", "Name", "Status", "Warmup", "Reply Rate", "Daily Limit", "Total Sent", "Total Replies"];
-    const rows = selectedEmails.map(e => [
-      e.email,
-      e.name,
-      e.status,
-      e.warmupEnabled !== false ? "ON" : "OFF",
-      `${e.replyRate}%`,
-      e.dailyLimit,
-      e.totalSent || e.sentLast7Days,
-      e.totalReplies || e.repliesLast7Days,
-    ]);
+    const headers = ["Email", "Name", "Health", "Warmup", "Reply Rate", "Baseline Avg", "Current Avg", "% Change", "Daily Limit", "Total Sent", "Total Replies"];
+    const rows = selectedEmails.map(e => {
+      const analysis = trendAnalysisMap.get(e.id);
+      const health = analysis ? getHealthLabel(analysis.health).label : "No Data";
+      return [
+        e.email,
+        e.name,
+        health,
+        e.warmupEnabled !== false ? "ON" : "OFF",
+        `${e.replyRate}%`,
+        analysis ? `${analysis.baselineAvg}%` : "-",
+        analysis ? `${analysis.currentAvg}%` : "-",
+        analysis && analysis.health !== 'gathering-data' ? `${analysis.percentChange}%` : "-",
+        e.dailyLimit,
+        e.totalSent || e.sentLast7Days,
+        e.totalReplies || e.repliesLast7Days,
+      ];
+    });
     
     const csvContent = [
       headers.join(","),
@@ -626,14 +699,7 @@ function EmailsPageContent() {
     link.click();
     
     toast.success(`Exported ${selectedIds.size} email(s) to CSV`);
-  }, [selectedIds, apiEmails]);
-
-  const getReplyRateColor = (rate: number, hasSends: boolean) => {
-    if (!hasSends) return "text-gray-400";
-    if (rate < 1) return "text-red-600 font-semibold";
-    if (rate < 2) return "text-yellow-600 font-medium";
-    return "text-green-600 font-semibold";
-  };
+  }, [selectedIds, apiEmails, trendAnalysisMap]);
 
   if (loading) {
     return (
@@ -690,54 +756,51 @@ function EmailsPageContent() {
         </Card>
 
         {/* Reply Rate Card */}
-        <Card className={`col-span-1 hover:shadow-lg transition-shadow ${
-          summaryStats.avgReplyRate >= 2 ? "bg-gradient-to-br from-green-50 to-green-100 border-green-200" :
-          summaryStats.avgReplyRate >= 1 ? "bg-gradient-to-br from-yellow-50 to-yellow-100 border-yellow-200" :
-          "bg-gradient-to-br from-red-50 to-red-100 border-red-200"
-        }`}>
+        <Card className="col-span-1 bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200 hover:shadow-lg transition-shadow">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-2xl">💬</span>
-              <span className={`text-xs uppercase tracking-wide font-medium ${
-                summaryStats.avgReplyRate >= 2 ? "text-green-600" :
-                summaryStats.avgReplyRate >= 1 ? "text-yellow-600" : "text-red-600"
-              }`}>Avg Reply Rate</span>
+              <span className="text-xs text-blue-600 uppercase tracking-wide font-medium">Avg Reply Rate</span>
             </div>
-            <div className={`text-2xl font-bold ${getReplyRateColor(summaryStats.avgReplyRate, true)}`}>
-              {summaryStats.avgReplyRate >= 2 ? "🟢" : summaryStats.avgReplyRate >= 1 ? "🟡" : "🔴"} {summaryStats.avgReplyRate}%
+            <div className="text-2xl font-bold text-blue-600">
+              {summaryStats.avgReplyRate}%
             </div>
             <div className="text-xs text-gray-400">across all accounts</div>
           </CardContent>
         </Card>
 
-        {/* At Risk Card */}
+        {/* Declining Card */}
         <Card className={`col-span-1 hover:shadow-lg transition-shadow ${
-          summaryStats.atRisk === 0 ? "bg-gradient-to-br from-green-50 to-green-100 border-green-200" :
+          summaryStats.declining === 0 ? "bg-gradient-to-br from-green-50 to-green-100 border-green-200" :
           "bg-gradient-to-br from-red-50 to-red-100 border-red-200"
         }`}>
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl">{summaryStats.atRisk === 0 ? "✅" : "⚠️"}</span>
+              <span className="text-2xl">{summaryStats.declining === 0 ? "✅" : "🔴"}</span>
               <span className={`text-xs uppercase tracking-wide font-medium ${
-                summaryStats.atRisk === 0 ? "text-green-600" : "text-red-600"
-              }`}>At Risk</span>
+                summaryStats.declining === 0 ? "text-green-600" : "text-red-600"
+              }`}>Declining</span>
             </div>
-            <div className={`text-2xl font-bold ${summaryStats.atRisk === 0 ? "text-green-600" : "text-red-600"}`}>
-              {summaryStats.atRisk}
+            <div className={`text-2xl font-bold ${summaryStats.declining === 0 ? "text-green-600" : "text-red-600"}`}>
+              {summaryStats.declining}
             </div>
-            <div className="text-xs text-gray-400">&lt;1% reply rate</div>
+            <div className="text-xs text-gray-400">&gt;50% drop from baseline</div>
           </CardContent>
         </Card>
 
-        {/* Performing Card */}
+        {/* Stable/Improving Card */}
         <Card className="col-span-1 bg-gradient-to-br from-green-50 to-green-100 border-green-200 hover:shadow-lg transition-shadow">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl">🏆</span>
-              <span className="text-xs text-green-600 uppercase tracking-wide font-medium">Performing</span>
+              <span className="text-2xl">🟢</span>
+              <span className="text-xs text-green-600 uppercase tracking-wide font-medium">Stable / 📈 Improving</span>
             </div>
-            <div className="text-2xl font-bold text-green-600">{summaryStats.performing}</div>
-            <div className="text-xs text-gray-400">&gt;2% reply rate</div>
+            <div className="flex items-center gap-2">
+              <div className="text-2xl font-bold text-green-600">{summaryStats.stable}</div>
+              <span className="text-gray-400">/</span>
+              <div className="text-lg text-blue-600">{summaryStats.improving}</div>
+            </div>
+            <div className="text-xs text-gray-400">performing well</div>
           </CardContent>
         </Card>
 
@@ -753,15 +816,19 @@ function EmailsPageContent() {
               <div className="flex flex-col text-xs gap-1">
                 <span className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                  ✅ {filterCounts.healthy}
+                  🟢 {filterCounts.stable}
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                  📈 {filterCounts.improving}
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
-                  ⚠️ {filterCounts.warning}
+                  🟡 {filterCounts.warning}
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                  🔴 {filterCounts.burned}
+                  🔴 {filterCounts.declining}
                 </span>
               </div>
             </div>
@@ -769,12 +836,12 @@ function EmailsPageContent() {
         </Card>
       </div>
 
-      {/* Quick Filter Buttons - Now more visual */}
+      {/* Quick Filter Buttons - Trend-based */}
       <div className="flex flex-wrap gap-2 mb-4">
         <button
           onClick={() => handleQuickFilter("all")}
           className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-            activeQuickFilter === "all"
+            healthFilter === "all"
               ? "bg-gray-900 text-white shadow-lg"
               : "bg-gray-100 text-gray-700 hover:bg-gray-200"
           }`}
@@ -782,34 +849,54 @@ function EmailsPageContent() {
           📋 All ({filterCounts.all})
         </button>
         <button
-          onClick={() => handleQuickFilter("burned")}
+          onClick={() => handleQuickFilter("declining")}
           className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-            activeQuickFilter === "burned"
+            healthFilter === "declining"
               ? "bg-red-600 text-white shadow-lg"
               : "bg-red-100 text-red-700 hover:bg-red-200"
           }`}
         >
-          🔴 Burned ({filterCounts.burned})
+          🔴 Declining ({filterCounts.declining})
         </button>
         <button
           onClick={() => handleQuickFilter("warning")}
           className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-            activeQuickFilter === "warning"
+            healthFilter === "warning"
               ? "bg-yellow-500 text-white shadow-lg"
               : "bg-yellow-100 text-yellow-700 hover:bg-yellow-200"
           }`}
         >
-          ⚠️ Warning ({filterCounts.warning})
+          🟡 Warning ({filterCounts.warning})
         </button>
         <button
-          onClick={() => handleQuickFilter("healthy")}
+          onClick={() => handleQuickFilter("stable")}
           className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-            activeQuickFilter === "healthy"
+            healthFilter === "stable"
               ? "bg-green-600 text-white shadow-lg"
               : "bg-green-100 text-green-700 hover:bg-green-200"
           }`}
         >
-          ✅ Healthy ({filterCounts.healthy})
+          🟢 Stable ({filterCounts.stable})
+        </button>
+        <button
+          onClick={() => handleQuickFilter("improving")}
+          className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
+            healthFilter === "improving"
+              ? "bg-blue-600 text-white shadow-lg"
+              : "bg-blue-100 text-blue-700 hover:bg-blue-200"
+          }`}
+        >
+          📈 Improving ({filterCounts.improving})
+        </button>
+        <button
+          onClick={() => handleQuickFilter("gathering-data")}
+          className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
+            healthFilter === "gathering-data"
+              ? "bg-gray-600 text-white shadow-lg"
+              : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+          }`}
+        >
+          📊 Gathering Data ({filterCounts.gatheringData})
         </button>
       </div>
 
@@ -824,7 +911,7 @@ function EmailsPageContent() {
                 onChange={(e) => {
                   setSearch(e.target.value);
                   setPage(1);
-                  updateURL(statusFilter, warmupFilter, e.target.value, sortBy, sortOrder);
+                  updateURL(healthFilter, warmupFilter, e.target.value, sortBy, sortOrder);
                 }}
                 className="text-sm"
               />
@@ -837,7 +924,7 @@ function EmailsPageContent() {
                   const newWarmup = e.target.value as "on" | "off" | "all";
                   setWarmupFilter(newWarmup);
                   setPage(1);
-                  updateURL(statusFilter, newWarmup, search, sortBy, sortOrder);
+                  updateURL(healthFilter, newWarmup, search, sortBy, sortOrder);
                 }}
               >
                 <option value="all">🔥 All Warmup</option>
@@ -851,7 +938,7 @@ function EmailsPageContent() {
                   const newSort = e.target.value as "replyRate" | "dailyLimit" | "totalSent";
                   setSortBy(newSort);
                   setPage(1);
-                  updateURL(statusFilter, warmupFilter, search, newSort, sortOrder);
+                  updateURL(healthFilter, warmupFilter, search, newSort, sortOrder);
                 }}
               >
                 <option value="replyRate">📊 Sort: Reply Rate</option>
@@ -862,7 +949,7 @@ function EmailsPageContent() {
                 onClick={() => {
                   const newOrder = sortOrder === "asc" ? "desc" : "asc";
                   setSortOrder(newOrder);
-                  updateURL(statusFilter, warmupFilter, search, sortBy, newOrder);
+                  updateURL(healthFilter, warmupFilter, search, sortBy, newOrder);
                 }}
                 className="px-3 py-2 border rounded-md text-sm hover:bg-gray-50"
                 title={sortOrder === "asc" ? "Lowest first" : "Highest first"}
@@ -914,14 +1001,16 @@ function EmailsPageContent() {
           const isSelected = selectedIds.has(email.id);
           const warmupEnabled = email.warmupEnabled !== false && email.warmupStatus !== "paused";
           const trend = calculateAccountTrend(email.id);
+          const trendAnalysis = trendAnalysisMap.get(email.id);
+          const healthInfo = trendAnalysis ? getHealthLabel(trendAnalysis.health) : null;
           
           return (
             <Card 
               key={email.id} 
               className={`cursor-pointer transition-all hover:shadow-md ${
                 isSelected ? "ring-2 ring-blue-500 bg-blue-50" : 
-                email.status === "burned" ? "border-red-200 bg-red-50" :
-                email.status === "warning" ? "border-yellow-200 bg-yellow-50" :
+                trendAnalysis?.health === "declining" ? "border-red-200 bg-red-50" :
+                trendAnalysis?.health === "warning" ? "border-yellow-200 bg-yellow-50" :
                 "hover:bg-gray-50"
               }`}
             >
@@ -937,23 +1026,33 @@ function EmailsPageContent() {
                     <div className="flex justify-between items-start mb-3">
                       <div className="min-w-0 flex-1">
                         <div className="font-medium text-sm truncate flex items-center gap-2">
-                          <StatusIcon status={email.status} />
+                          {healthInfo && <span className="text-lg">{healthInfo.emoji}</span>}
                           {email.email}
                         </div>
                         <div className="text-xs text-gray-500">{email.name}</div>
                       </div>
                     </div>
                     
+                    {/* Health Status - NEW */}
+                    <div className="bg-white rounded-lg p-3 mb-3 border">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-gray-500">📊 Health Trend</span>
+                        {healthInfo && (
+                          <span className={`text-xs font-medium ${healthInfo.color}`}>
+                            {healthInfo.label}
+                          </span>
+                        )}
+                      </div>
+                      <TrendChangeDisplay analysis={trendAnalysis} compact />
+                    </div>
+                    
                     {/* Reply Rate Visual */}
                     <div className="bg-white rounded-lg p-3 mb-3 border">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs text-gray-500">💬 Reply Rate</span>
-                        <div className="flex items-center gap-1">
-                          <AccountTrendIndicator trend={trend} />
-                          {trend && trend.replyRates.length > 1 && (
-                            <MiniSparkline data={trend.replyRates.map(r => r.rate)} />
-                          )}
-                        </div>
+                        <span className="text-xs text-gray-500">💬 Current Reply Rate</span>
+                        {trend && trend.replyRates.length > 1 && (
+                          <MiniSparkline data={trend.replyRates.map(r => r.rate)} />
+                        )}
                       </div>
                       <ReplyRateBar rate={email.replyRate} hasSends={hasSends} />
                     </div>
@@ -1002,14 +1101,15 @@ function EmailsPageContent() {
                     />
                   </th>
                   <th className="text-left p-4 font-medium text-sm text-gray-600">📧 Email</th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">Status</th>
+                  <th className="text-center p-4 font-medium text-sm text-gray-600">Health</th>
+                  <th className="text-center p-4 font-medium text-sm text-gray-600">Trend</th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">
                     <button 
                       onClick={() => {
                         setSortBy("replyRate");
                         const newOrder = sortBy === "replyRate" ? (sortOrder === "asc" ? "desc" : "asc") : "asc";
                         setSortOrder(newOrder);
-                        updateURL(statusFilter, warmupFilter, search, "replyRate", newOrder);
+                        updateURL(healthFilter, warmupFilter, search, "replyRate", newOrder);
                       }}
                       className="hover:text-gray-900 flex items-center gap-1 mx-auto"
                     >
@@ -1023,7 +1123,7 @@ function EmailsPageContent() {
                         setSortBy("dailyLimit");
                         const newOrder = sortBy === "dailyLimit" ? (sortOrder === "asc" ? "desc" : "asc") : "desc";
                         setSortOrder(newOrder);
-                        updateURL(statusFilter, warmupFilter, search, "dailyLimit", newOrder);
+                        updateURL(healthFilter, warmupFilter, search, "dailyLimit", newOrder);
                       }}
                       className="hover:text-gray-900 flex items-center gap-1 mx-auto"
                     >
@@ -1032,14 +1132,14 @@ function EmailsPageContent() {
                     </button>
                   </th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">📅 Days Active</th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">📈 Trend</th>
+                  <th className="text-center p-4 font-medium text-sm text-gray-600">📈 Sparkline</th>
                   <th className="text-right p-4 font-medium text-sm text-gray-600">
                     <button 
                       onClick={() => {
                         setSortBy("totalSent");
                         const newOrder = sortBy === "totalSent" ? (sortOrder === "asc" ? "desc" : "asc") : "desc";
                         setSortOrder(newOrder);
-                        updateURL(statusFilter, warmupFilter, search, "totalSent", newOrder);
+                        updateURL(healthFilter, warmupFilter, search, "totalSent", newOrder);
                       }}
                       className="hover:text-gray-900 flex items-center gap-1 ml-auto"
                     >
@@ -1056,14 +1156,15 @@ function EmailsPageContent() {
                   const isSelected = selectedIds.has(email.id);
                   const warmupEnabled = email.warmupEnabled !== false && email.warmupStatus !== "paused";
                   const trend = calculateAccountTrend(email.id);
+                  const trendAnalysis = trendAnalysisMap.get(email.id);
                   
                   return (
                     <tr 
                       key={email.id} 
                       className={`border-b cursor-pointer transition-all ${
                         isSelected ? "bg-blue-50" : 
-                        email.status === "burned" ? "bg-red-50 hover:bg-red-100" :
-                        email.status === "warning" ? "bg-yellow-50 hover:bg-yellow-100" :
+                        trendAnalysis?.health === "declining" ? "bg-red-50 hover:bg-red-100" :
+                        trendAnalysis?.health === "warning" ? "bg-yellow-50 hover:bg-yellow-100" :
                         "hover:bg-gray-50"
                       }`}
                       onClick={() => toggleSelectEmail(email.id)}
@@ -1081,7 +1182,10 @@ function EmailsPageContent() {
                         </div>
                       </td>
                       <td className="p-4 text-center">
-                        <StatusIcon status={email.status} />
+                        <TrendHealthIndicator analysis={trendAnalysis} />
+                      </td>
+                      <td className="p-4">
+                        <TrendChangeDisplay analysis={trendAnalysis} compact />
                       </td>
                       <td className="p-4">
                         <div className="flex justify-center">
@@ -1098,7 +1202,6 @@ function EmailsPageContent() {
                       </td>
                       <td className="p-4 text-center">
                         <div className="flex items-center justify-center gap-2">
-                          <AccountTrendIndicator trend={trend} />
                           {trend && trend.replyRates.length > 1 && (
                             <MiniSparkline data={trend.replyRates.map(r => r.rate)} />
                           )}

@@ -12,8 +12,9 @@ import {
   calculateLifespanStats,
   getRecentlyDegraded,
   getOverallReplyRateTrend,
+  getHealthLabel,
   type LifespanStats,
-  type StatusTransition,
+  type TrendHealth,
 } from "@/lib/account-history";
 import Link from "next/link";
 
@@ -146,7 +147,13 @@ export default function Dashboard() {
   const { stats: bisonStats, emails: bisonEmails, domains: bisonDomains, loading, error, connected, lastFetched, refetch } = useBisonData();
   const [lastSyncDisplay, setLastSyncDisplay] = useState<string>("Loading...");
   const [lifespanStats, setLifespanStats] = useState<LifespanStats | null>(null);
-  const [recentlyDegraded, setRecentlyDegraded] = useState<StatusTransition[]>([]);
+  const [recentlyDegraded, setRecentlyDegraded] = useState<Array<{
+    accountId: number;
+    email: string;
+    fromStatus: TrendHealth;
+    toStatus: TrendHealth;
+    percentDrop: number;
+  }>>([]);
   const [overallTrend, setOverallTrend] = useState<{ date: string; avgRate: number }[]>([]);
   
   // Use real data if connected, otherwise fall back to mock
@@ -480,19 +487,22 @@ export default function Dashboard() {
                 </div>
                 {recentlyDegraded.length > 0 ? (
                   <div className="space-y-2">
-                    {recentlyDegraded.slice(0, 3).map((transition, index) => (
-                      <div 
-                        key={`${transition.accountId}-${transition.date}`}
-                        className={`flex items-center justify-between p-2 rounded-lg text-sm ${
-                          transition.toStatus === 'burned' ? 'bg-red-50' : 'bg-yellow-50'
-                        }`}
-                      >
-                        <span className="truncate flex-1 mr-2">{transition.email}</span>
-                        <span className="text-xs shrink-0">
-                          {transition.fromStatus === 'healthy' ? '🟢' : '🟡'} → {transition.toStatus === 'burned' ? '🔴' : '🟡'}
-                        </span>
-                      </div>
-                    ))}
+                    {recentlyDegraded.slice(0, 3).map((item, index) => {
+                      const healthInfo = getHealthLabel(item.toStatus);
+                      return (
+                        <div 
+                          key={`${item.accountId}-${index}`}
+                          className={`flex items-center justify-between p-2 rounded-lg text-sm ${
+                            item.toStatus === 'declining' ? 'bg-red-50' : 'bg-yellow-50'
+                          }`}
+                        >
+                          <span className="truncate flex-1 mr-2">{item.email}</span>
+                          <span className="text-xs shrink-0 flex items-center gap-1">
+                            {healthInfo.emoji} ↓{item.percentDrop}%
+                          </span>
+                        </div>
+                      );
+                    })}
                     {recentlyDegraded.length > 3 && (
                       <Link href="/trends" className="text-xs text-blue-600 hover:text-blue-800 block text-center">
                         +{recentlyDegraded.length - 3} more → View all
@@ -501,7 +511,7 @@ export default function Dashboard() {
                   </div>
                 ) : (
                   <div className="text-center py-4 text-gray-500 text-sm">
-                    No accounts degraded in the last 7 days 🎉
+                    No accounts declining recently 🎉
                   </div>
                 )}
               </CardContent>
