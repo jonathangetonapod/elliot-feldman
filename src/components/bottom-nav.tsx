@@ -6,11 +6,11 @@ import { cn } from "@/lib/utils";
 import { useAlertCounts } from "@/lib/use-alerts";
 
 const navigation = [
-  { name: "Dashboard", href: "/", icon: "📊" },
+  { name: "Home", href: "/", icon: "📊" },
   { name: "Emails", href: "/emails", icon: "📧" },
+  { name: "Trends", href: "/trends", icon: "📈" },
   { name: "Alerts", href: "/alerts", icon: "🔔" },
-  { name: "Domains", href: "/domains", icon: "🌐" },
-  { name: "Settings", href: "/settings", icon: "⚙️" },
+  { name: "More", href: "/settings", icon: "⚙️" },
 ];
 
 export function BottomNav() {
@@ -57,7 +57,7 @@ export function BottomNav() {
                 )}
               </span>
               <span className={cn(
-                "text-[10px] font-medium truncate",
+                "text-[9px] font-medium truncate max-w-[50px]",
                 isActive ? "text-white" : "text-gray-500"
               )}>
                 {item.name}

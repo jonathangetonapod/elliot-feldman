@@ -5,8 +5,17 @@ import { Badge } from "@/components/ui/badge";
 import { getMockDashboardStats, getMockDomainHealth, generateMockEmails } from "@/lib/mock-data";
 import { useBisonData } from "@/lib/use-bison-data";
 import { Recommendations } from "@/components/recommendations";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import {
+  takeSnapshot,
+  calculateLifespanStats,
+  getRecentlyDegraded,
+  getOverallReplyRateTrend,
+  type LifespanStats,
+  type StatusTransition,
+} from "@/lib/account-history";
+import Link from "next/link";
 
 // Helper to format time ago
 function formatTimeAgo(date: Date | null): string {
@@ -87,6 +96,9 @@ const COLORS = {
 export default function Dashboard() {
   const { stats: bisonStats, emails: bisonEmails, domains: bisonDomains, loading, error, connected, lastFetched, refetch } = useBisonData();
   const [lastSyncDisplay, setLastSyncDisplay] = useState<string>("Loading...");
+  const [lifespanStats, setLifespanStats] = useState<LifespanStats | null>(null);
+  const [recentlyDegraded, setRecentlyDegraded] = useState<StatusTransition[]>([]);
+  const [overallTrend, setOverallTrend] = useState<{ date: string; avgRate: number }[]>([]);
   
   // Use real data if connected, otherwise fall back to mock
   const useMockData = !connected || error || !bisonStats;
@@ -108,6 +120,41 @@ export default function Dashboard() {
     const interval = setInterval(updateSyncDisplay, 60000);
     return () => clearInterval(interval);
   }, [lastFetched, useMockData]);
+  
+  // Take snapshot and load history when emails are available
+  useEffect(() => {
+    if (loading || emails.length === 0) return;
+    
+    // Transform emails to the format expected by takeSnapshot
+    const accountData = emails.map(e => ({
+      id: e.id,
+      email: e.email,
+      replyRate: e.replyRate,
+      sentLast7Days: e.sentLast7Days,
+      repliesLast7Days: e.repliesLast7Days,
+      status: e.status,
+      dailyLimit: e.dailyLimit,
+    }));
+    
+    // Take snapshot (will only save once per day)
+    takeSnapshot(accountData);
+    
+    // Load history data
+    setLifespanStats(calculateLifespanStats());
+    setRecentlyDegraded(getRecentlyDegraded(7));
+    setOverallTrend(getOverallReplyRateTrend());
+  }, [loading, emails]);
+  
+  // Calculate overall reply rate trend direction
+  const replyRateTrend = useMemo(() => {
+    if (overallTrend.length < 2) return 'stable' as const;
+    const first = overallTrend[0]?.avgRate ?? 0;
+    const last = overallTrend[overallTrend.length - 1]?.avgRate ?? 0;
+    const change = last - first;
+    if (change > 0.3) return 'up' as const;
+    if (change < -0.3) return 'down' as const;
+    return 'stable' as const;
+  }, [overallTrend]);
   
   // Get recent issues (burned + warning emails)
   const recentIssues = emails
@@ -266,7 +313,7 @@ export default function Dashboard() {
                 <div className={`text-3xl lg:text-4xl font-bold ${replyRateColors.text}`}>
                   {stats.avgReplyRate}%
                 </div>
-                <TrendIndicator trend={stats.avgReplyRate >= 2 ? "up" : stats.avgReplyRate >= 1 ? "stable" : "down"} value="7d avg" />
+                <TrendIndicator trend={replyRateTrend} value={overallTrend.length >= 2 ? `${overallTrend.length}d trend` : "7d avg"} />
               </CardContent>
             </Card>
 
@@ -313,17 +360,102 @@ export default function Dashboard() {
             </Card>
           </div>
 
+          {/* Lifespan & Recently Degraded Row */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6 mb-6 lg:mb-8">
+            {/* Avg Account Lifespan */}
+            <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200 hover:shadow-lg transition-shadow">
+              <CardContent className="p-4 lg:p-6">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    <span className="text-3xl">⏱️</span>
+                    <span className="text-sm text-purple-600 font-medium">Avg Account Lifespan</span>
+                  </div>
+                  <Link href="/trends" className="text-xs text-purple-600 hover:text-purple-800 underline">
+                    View Trends →
+                  </Link>
+                </div>
+                {lifespanStats ? (
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="text-center">
+                      <div className="text-2xl lg:text-3xl font-bold text-purple-700">
+                        {lifespanStats.avgDaysHealthyToWarning ?? '—'}
+                      </div>
+                      <div className="text-xs text-purple-600">🟢→🟡 days</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl lg:text-3xl font-bold text-purple-700">
+                        {lifespanStats.avgDaysWarningToBurned ?? '—'}
+                      </div>
+                      <div className="text-xs text-purple-600">🟡→🔴 days</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl lg:text-3xl font-bold text-purple-700">
+                        {lifespanStats.avgTotalLifespan ?? '—'}
+                      </div>
+                      <div className="text-xs text-purple-600">total days</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-4 text-purple-600 text-sm">
+                    Building history... Check back tomorrow for trends.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Recently Degraded */}
+            <Card className={`hover:shadow-lg transition-shadow ${recentlyDegraded.length > 0 ? 'border-orange-200' : ''}`}>
+              <CardContent className="p-4 lg:p-6">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    <span className="text-3xl">{recentlyDegraded.length > 0 ? '📉' : '✨'}</span>
+                    <span className="text-sm text-gray-700 font-medium">Recently Degraded</span>
+                  </div>
+                  <Badge variant="outline" className="text-xs">
+                    Last 7 days
+                  </Badge>
+                </div>
+                {recentlyDegraded.length > 0 ? (
+                  <div className="space-y-2">
+                    {recentlyDegraded.slice(0, 3).map((transition, index) => (
+                      <div 
+                        key={`${transition.accountId}-${transition.date}`}
+                        className={`flex items-center justify-between p-2 rounded-lg text-sm ${
+                          transition.toStatus === 'burned' ? 'bg-red-50' : 'bg-yellow-50'
+                        }`}
+                      >
+                        <span className="truncate flex-1 mr-2">{transition.email}</span>
+                        <span className="text-xs shrink-0">
+                          {transition.fromStatus === 'healthy' ? '🟢' : '🟡'} → {transition.toStatus === 'burned' ? '🔴' : '🟡'}
+                        </span>
+                      </div>
+                    ))}
+                    {recentlyDegraded.length > 3 && (
+                      <Link href="/trends" className="text-xs text-blue-600 hover:text-blue-800 block text-center">
+                        +{recentlyDegraded.length - 3} more → View all
+                      </Link>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-center py-4 text-gray-500 text-sm">
+                    No accounts degraded in the last 7 days 🎉
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
           {/* Charts Section */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6 mb-6 lg:mb-8">
             {/* Pie Chart - Reply Rate Distribution */}
             <Card className="hover:shadow-lg transition-shadow">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base lg:text-lg flex items-center gap-2">
+              <CardHeader className="pb-2 px-3 lg:px-6">
+                <CardTitle className="text-sm lg:text-lg flex items-center gap-2">
                   📊 Reply Rate Distribution
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="h-64">
+              <CardContent className="px-3 lg:px-6">
+                <div className="h-48 lg:h-64">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
@@ -331,10 +463,10 @@ export default function Dashboard() {
                         cx="50%"
                         cy="50%"
                         innerRadius={0}
-                        outerRadius={80}
+                        outerRadius={60}
                         paddingAngle={2}
                         dataKey="value"
-                        label={({ name, value }) => `${value}`}
+                        label={({ value }) => `${value}`}
                         labelLine={false}
                       >
                         {replyRateDistributionData.map((entry, index) => (
@@ -342,22 +474,21 @@ export default function Dashboard() {
                         ))}
                       </Pie>
                       <Tooltip formatter={(value) => [`${value} accounts`, '']} />
-                      <Legend />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
-                {/* Quick Legend */}
-                <div className="flex justify-center gap-4 mt-2 text-xs">
+                {/* Quick Legend - always visible */}
+                <div className="flex justify-center gap-2 lg:gap-4 mt-2 text-xs">
                   <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded-full bg-red-500"></span>
+                    <span className="w-2 h-2 lg:w-3 lg:h-3 rounded-full bg-red-500"></span>
                     🔴 {criticalAccounts.length}
                   </span>
                   <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded-full bg-yellow-500"></span>
+                    <span className="w-2 h-2 lg:w-3 lg:h-3 rounded-full bg-yellow-500"></span>
                     🟡 {warningAccounts.length}
                   </span>
                   <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded-full bg-green-500"></span>
+                    <span className="w-2 h-2 lg:w-3 lg:h-3 rounded-full bg-green-500"></span>
                     🟢 {healthyAccounts.length}
                   </span>
                 </div>
@@ -366,24 +497,24 @@ export default function Dashboard() {
 
             {/* Donut Chart - Warmup Status */}
             <Card className="hover:shadow-lg transition-shadow">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base lg:text-lg flex items-center gap-2">
+              <CardHeader className="pb-2 px-3 lg:px-6">
+                <CardTitle className="text-sm lg:text-lg flex items-center gap-2">
                   🔥 Warmup Status
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="h-64">
+              <CardContent className="px-3 lg:px-6">
+                <div className="h-48 lg:h-64">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
                         data={warmupStatusData}
                         cx="50%"
                         cy="50%"
-                        innerRadius={50}
-                        outerRadius={80}
+                        innerRadius={35}
+                        outerRadius={55}
                         paddingAngle={5}
                         dataKey="value"
-                        label={({ value, percent }) => `${value} (${((percent ?? 0) * 100).toFixed(0)}%)`}
+                        label={({ value }) => `${value}`}
                         labelLine={false}
                       >
                         {warmupStatusData.map((entry, index) => (
@@ -391,12 +522,11 @@ export default function Dashboard() {
                         ))}
                       </Pie>
                       <Tooltip formatter={(value) => [`${value} accounts`, '']} />
-                      <Legend />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
                 {/* Center text for donut */}
-                <div className="text-center text-sm text-gray-600 -mt-4">
+                <div className="text-center text-xs lg:text-sm text-gray-600 -mt-4">
                   <span className="font-bold text-orange-600">{warmupOn.length}</span> ON / <span className="text-gray-400">{warmupOff.length}</span> OFF
                 </div>
               </CardContent>
@@ -404,12 +534,12 @@ export default function Dashboard() {
 
             {/* Daily Limit Distribution */}
             <Card className="hover:shadow-lg transition-shadow">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base lg:text-lg flex items-center gap-2">
+              <CardHeader className="pb-2 px-3 lg:px-6">
+                <CardTitle className="text-sm lg:text-lg flex items-center gap-2">
                   📈 Warmup Progress Stages
                 </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="px-3 lg:px-6">
                 <div className="space-y-4">
                   {/* Daily limit tiers */}
                   {(() => {
@@ -513,17 +643,17 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6 mb-6 lg:mb-8">
             {/* Top 10 Performers */}
             <Card className="hover:shadow-lg transition-shadow">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base lg:text-lg flex items-center gap-2">
+              <CardHeader className="pb-2 px-3 lg:px-6">
+                <CardTitle className="text-sm lg:text-lg flex items-center gap-2">
                   🏆 Top 10 by Reply Rate
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="h-80">
+              <CardContent className="px-2 lg:px-6">
+                <div className="h-64 lg:h-80">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={top10ByReplyRate} layout="vertical" margin={{ left: 10, right: 30 }}>
-                      <XAxis type="number" domain={[0, 'dataMax']} tickFormatter={(v) => `${v}%`} />
-                      <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11 }} />
+                    <BarChart data={top10ByReplyRate} layout="vertical" margin={{ left: 0, right: 20, top: 5, bottom: 5 }}>
+                      <XAxis type="number" domain={[0, 'dataMax']} tickFormatter={(v) => `${v}%`} tick={{ fontSize: 10 }} />
+                      <YAxis type="category" dataKey="name" width={60} tick={{ fontSize: 9 }} />
                       <Tooltip formatter={(value) => [`${value}%`, 'Reply Rate']} />
                       <Bar dataKey="replyRate" radius={[0, 4, 4, 0]}>
                         {top10ByReplyRate.map((entry, index) => (
@@ -538,17 +668,17 @@ export default function Dashboard() {
 
             {/* Bottom 10 (Needs Attention) */}
             <Card className="hover:shadow-lg transition-shadow border-red-100">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base lg:text-lg flex items-center gap-2">
+              <CardHeader className="pb-2 px-3 lg:px-6">
+                <CardTitle className="text-sm lg:text-lg flex items-center gap-2">
                   ⚠️ Bottom 10 - Needs Attention
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="h-80">
+              <CardContent className="px-2 lg:px-6">
+                <div className="h-64 lg:h-80">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={bottom10ByReplyRate} layout="vertical" margin={{ left: 10, right: 30 }}>
-                      <XAxis type="number" domain={[0, 'dataMax']} tickFormatter={(v) => `${v}%`} />
-                      <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11 }} />
+                    <BarChart data={bottom10ByReplyRate} layout="vertical" margin={{ left: 0, right: 20, top: 5, bottom: 5 }}>
+                      <XAxis type="number" domain={[0, 'dataMax']} tickFormatter={(v) => `${v}%`} tick={{ fontSize: 10 }} />
+                      <YAxis type="category" dataKey="name" width={60} tick={{ fontSize: 9 }} />
                       <Tooltip formatter={(value) => [`${value}%`, 'Reply Rate']} />
                       <Bar dataKey="replyRate" radius={[0, 4, 4, 0]}>
                         {bottom10ByReplyRate.map((entry, index) => (

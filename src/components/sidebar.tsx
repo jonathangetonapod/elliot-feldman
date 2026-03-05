@@ -9,6 +9,7 @@ const navigation = [
   { name: "Dashboard", href: "/", icon: "📊" },
   { name: "Client View", href: "/client", icon: "👤" },
   { name: "Email Accounts", href: "/emails", icon: "📧" },
+  { name: "Trends", href: "/trends", icon: "📈" },
   { name: "Domain Health", href: "/domains", icon: "🌐" },
   { name: "Warmup Calendar", href: "/warmup", icon: "📅" },
   { name: "Alerts", href: "/alerts", icon: "🔔" },

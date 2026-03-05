@@ -10,6 +10,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { getEmails, type EmailStatus, type WarmupStatus, type SenderEmail } from "@/lib/mock-data";
 import { toast } from "sonner";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import {
+  takeSnapshot,
+  calculateAccountTrend,
+  getDaysActive,
+  type AccountTrend,
+} from "@/lib/account-history";
 
 interface BisonSenderEmail {
   id: number;
@@ -98,7 +104,9 @@ function transformBisonEmail(bisonEmail: BisonSenderEmail): SenderEmail {
     warmupEnabled: bisonEmail.warmup_enabled,
     totalSent: emailsSent,
     totalReplies: uniqueReplies,
-  } as SenderEmail & { warmupEnabled: boolean; totalSent: number; totalReplies: number };
+    createdAt: bisonEmail.created_at,
+    daysActive: daysSinceCreation,
+  } as DisplayEmail;
 }
 
 // Extended type for display
@@ -106,7 +114,65 @@ type DisplayEmail = SenderEmail & {
   warmupEnabled?: boolean; 
   totalSent?: number; 
   totalReplies?: number;
+  createdAt?: string;
+  daysActive?: number;
+  trend?: AccountTrend | null;
 };
+
+// Mini Sparkline component for reply rate history
+function MiniSparkline({ data, width = 60, height = 20 }: { data: number[]; width?: number; height?: number }) {
+  if (data.length < 2) {
+    return <span className="text-xs text-gray-400">—</span>;
+  }
+  
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  
+  const points = data.map((value, index) => {
+    const x = (index / (data.length - 1)) * width;
+    const y = height - ((value - min) / range) * height;
+    return `${x},${y}`;
+  }).join(' ');
+  
+  const lastValue = data[data.length - 1];
+  const firstValue = data[0];
+  const color = lastValue > firstValue ? '#22c55e' : lastValue < firstValue ? '#ef4444' : '#9ca3af';
+  
+  return (
+    <svg width={width} height={height} className="inline-block">
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+// Trend indicator for accounts
+function AccountTrendIndicator({ trend }: { trend: AccountTrend | null | undefined }) {
+  if (!trend) {
+    return <span className="text-xs text-gray-400">—</span>;
+  }
+  
+  const config = {
+    improving: { icon: '↑', color: 'text-green-600' },
+    stable: { icon: '→', color: 'text-gray-500' },
+    declining: { icon: '↓', color: 'text-red-600' },
+  };
+  
+  const { icon, color } = config[trend.trend];
+  
+  return (
+    <span className={`text-sm font-medium ${color}`} title={`${trend.replyRateChange > 0 ? '+' : ''}${trend.replyRateChange}%`}>
+      {icon}
+    </span>
+  );
+}
 
 // Visual Reply Rate Bar Component
 function ReplyRateBar({ rate, hasSends }: { rate: number; hasSends: boolean }) {
@@ -325,6 +391,27 @@ function EmailsPageContent() {
     
     fetchEmails();
   }, []);
+
+  // Take snapshot for history tracking when emails load
+  useEffect(() => {
+    if (loading || !apiEmails || apiEmails.length === 0) return;
+    
+    // Transform to the format expected by takeSnapshot
+    const accountData = (apiEmails as DisplayEmail[]).map(e => ({
+      id: e.id,
+      email: e.email,
+      replyRate: e.replyRate,
+      sentLast7Days: e.sentLast7Days,
+      totalSent: e.totalSent,
+      repliesLast7Days: e.repliesLast7Days,
+      totalReplies: e.totalReplies,
+      status: e.status,
+      dailyLimit: e.dailyLimit,
+    }));
+    
+    // Take snapshot (will only save once per day)
+    takeSnapshot(accountData);
+  }, [loading, apiEmails]);
 
   // Calculate stats for the summary bar
   const summaryStats = useMemo(() => {
@@ -902,6 +989,7 @@ function EmailsPageContent() {
           const hasSends = (email.totalSent || email.sentLast7Days) > 0;
           const isSelected = selectedIds.has(email.id);
           const warmupEnabled = email.warmupEnabled !== false && email.warmupStatus !== "paused";
+          const trend = calculateAccountTrend(email.id);
           
           return (
             <Card 
@@ -934,7 +1022,15 @@ function EmailsPageContent() {
                     
                     {/* Reply Rate Visual */}
                     <div className="bg-white rounded-lg p-3 mb-3 border">
-                      <div className="text-xs text-gray-500 mb-2">💬 Reply Rate</div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-gray-500">💬 Reply Rate</span>
+                        <div className="flex items-center gap-1">
+                          <AccountTrendIndicator trend={trend} />
+                          {trend && trend.replyRates.length > 1 && (
+                            <MiniSparkline data={trend.replyRates.map(r => r.rate)} />
+                          )}
+                        </div>
+                      </div>
                       <ReplyRateBar rate={email.replyRate} hasSends={hasSends} />
                     </div>
                     
@@ -944,7 +1040,11 @@ function EmailsPageContent() {
                       <WarmupStageIndicator dailyLimit={email.dailyLimit} warmupEnabled={warmupEnabled} />
                     </div>
                     
-                    <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div className="bg-gray-50 p-2 rounded">
+                        <div className="text-gray-500">📅 Active</div>
+                        <div className="font-medium">{email.daysActive ?? getDaysActive(email.createdAt)}d</div>
+                      </div>
                       <div className="bg-gray-50 p-2 rounded">
                         <div className="text-gray-500">📤 Sent</div>
                         <div className="font-medium">{(email.totalSent || email.sentLast7Days).toLocaleString()}</div>
@@ -1007,6 +1107,8 @@ function EmailsPageContent() {
                       {sortBy === "dailyLimit" && (sortOrder === "asc" ? " ↑" : " ↓")}
                     </button>
                   </th>
+                  <th className="text-center p-4 font-medium text-sm text-gray-600">📅 Days Active</th>
+                  <th className="text-center p-4 font-medium text-sm text-gray-600">📈 Trend</th>
                   <th className="text-right p-4 font-medium text-sm text-gray-600">
                     <button 
                       onClick={() => {
@@ -1029,6 +1131,7 @@ function EmailsPageContent() {
                   const hasSends = (email.totalSent || email.sentLast7Days) > 0;
                   const isSelected = selectedIds.has(email.id);
                   const warmupEnabled = email.warmupEnabled !== false && email.warmupStatus !== "paused";
+                  const trend = calculateAccountTrend(email.id);
                   
                   return (
                     <tr 
@@ -1064,6 +1167,17 @@ function EmailsPageContent() {
                       <td className="p-4">
                         <div className="flex justify-center">
                           <WarmupStageIndicator dailyLimit={email.dailyLimit} warmupEnabled={warmupEnabled} />
+                        </div>
+                      </td>
+                      <td className="p-4 text-center text-gray-600">
+                        <span className="text-sm">{email.daysActive ?? getDaysActive(email.createdAt)}d</span>
+                      </td>
+                      <td className="p-4 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <AccountTrendIndicator trend={trend} />
+                          {trend && trend.replyRates.length > 1 && (
+                            <MiniSparkline data={trend.replyRates.map(r => r.rate)} />
+                          )}
                         </div>
                       </td>
                       <td className="p-4 text-right text-gray-600 font-medium">
