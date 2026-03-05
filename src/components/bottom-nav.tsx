@@ -7,9 +7,9 @@ import { useAlertCounts } from "@/lib/use-alerts";
 
 const navigation = [
   { name: "Home", href: "/", icon: "📊" },
-  { name: "Emails", href: "/emails", icon: "📧" },
-  { name: "Trends", href: "/trends", icon: "📈" },
+  { name: "Accounts", href: "/emails", icon: "📧" },
   { name: "Alerts", href: "/alerts", icon: "🔔" },
+  { name: "Domains", href: "/domains", icon: "🌐" },
   { name: "More", href: "/settings", icon: "⚙️" },
 ];
 
