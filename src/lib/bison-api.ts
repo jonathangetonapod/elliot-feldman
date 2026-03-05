@@ -436,7 +436,7 @@ export interface WarmupStatsResponse {
   };
 }
 
-export type WarmupPeriodType = '7vs14' | '14vs14' | '30vs30';
+export type WarmupPeriodType = '7vs7' | '7vs14' | '14vs14' | '30vs30';
 
 /**
  * Fetch warmup stats with date range comparison
@@ -550,7 +550,8 @@ export function getWarmupHealthSummary(accounts: WarmupAccountComparison[]): {
  */
 export function getPeriodLabel(periodType: WarmupPeriodType): string {
   switch (periodType) {
-    case '7vs14': return 'Last 7 days vs previous 14 days';
+    case '7vs7': return 'Last 7 days vs previous 7 days';
+    case '7vs14': return 'Last 7 days vs previous 7 days';
     case '14vs14': return 'Last 14 days vs previous 14 days';
     case '30vs30': return 'Last 30 days vs previous 30 days';
   }

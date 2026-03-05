@@ -137,6 +137,22 @@ function getComparisonPeriods(periodType: string = 'default'): {
   const now = new Date();
   
   switch (periodType) {
+    case '7vs7': {
+      // Last 7 days vs previous 7 days
+      const currentEnd = new Date(now);
+      const currentStart = new Date(now);
+      currentStart.setDate(currentStart.getDate() - 7);
+      
+      const baselineEnd = new Date(currentStart);
+      baselineEnd.setDate(baselineEnd.getDate() - 1);
+      const baselineStart = new Date(baselineEnd);
+      baselineStart.setDate(baselineStart.getDate() - 7);
+      
+      return {
+        current: { start: formatDate(currentStart), end: formatDate(currentEnd) },
+        baseline: { start: formatDate(baselineStart), end: formatDate(baselineEnd) },
+      };
+    }
     case '14vs14': {
       // Last 14 days vs previous 14 days
       const currentEnd = new Date(now);
@@ -171,7 +187,7 @@ function getComparisonPeriods(periodType: string = 'default'): {
     }
     case '7vs14':
     default: {
-      // Default: Last 7 days vs previous 14 days
+      // Default: Last 7 days vs previous 7 days (changed from 7vs14)
       const currentEnd = new Date(now);
       const currentStart = new Date(now);
       currentStart.setDate(currentStart.getDate() - 7);
@@ -179,7 +195,7 @@ function getComparisonPeriods(periodType: string = 'default'): {
       const baselineEnd = new Date(currentStart);
       baselineEnd.setDate(baselineEnd.getDate() - 1);
       const baselineStart = new Date(baselineEnd);
-      baselineStart.setDate(baselineStart.getDate() - 14);
+      baselineStart.setDate(baselineStart.getDate() - 7);
       
       return {
         current: { start: formatDate(currentStart), end: formatDate(currentEnd) },
