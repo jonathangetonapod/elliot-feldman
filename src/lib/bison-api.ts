@@ -401,6 +401,7 @@ export interface WarmupPeriodStats {
   warmup_score: number;
   warmup_emails_sent: number;
   warmup_replies_received: number;
+  warmup_reply_rate: number;
   warmup_emails_saved_from_spam: number;
   warmup_bounces_received_count: number;
   warmup_bounces_caused_count: number;
@@ -417,6 +418,7 @@ export interface WarmupAccountComparison {
   baseline: WarmupPeriodStats | null;
   changes: {
     warmup_score: number;
+    warmup_reply_rate: number;
     warmup_replies_received: number;
     warmup_bounces_received_count: number;
   };

@@ -284,27 +284,40 @@ export async function GET(request: NextRequest) {
           ? ((currentScore - baselineScore) / baselineScore) * 100 
           : 0;
         
+        // REPLY RATE CALCULATION - This is what matters for burn prediction!
+        const currentSent = current.warmup_emails_sent ?? 0;
         const currentReplies = current.warmup_replies_received ?? 0;
-        const baselineReplies = baseline?.warmup_replies_received ?? currentReplies;
-        const repliesChange = baselineReplies > 0
-          ? ((currentReplies - baselineReplies) / baselineReplies) * 100
+        const currentReplyRate = currentSent > 0 ? (currentReplies / currentSent) * 100 : 0;
+        
+        const baselineSent = baseline?.warmup_emails_sent ?? 0;
+        const baselineReplies = baseline?.warmup_replies_received ?? 0;
+        const baselineReplyRate = baselineSent > 0 ? (baselineReplies / baselineSent) * 100 : 0;
+        
+        // Reply rate change - positive = improving, negative = declining
+        const replyRateChange = baselineReplyRate > 0
+          ? ((currentReplyRate - baselineReplyRate) / baselineReplyRate) * 100
           : 0;
         
         const currentBounces = current.warmup_bounces_received_count ?? 0;
         const baselineBounces = baseline?.warmup_bounces_received_count ?? 0;
         const bouncesChange = currentBounces - baselineBounces;
         
-        // Determine health status based on warmup score changes
+        // Determine health status based on REPLY RATE changes (not warmup score!)
+        // Burn Risk = Reply Rate dropping drastically week over week
         let health: 'declining' | 'warning' | 'stable' | 'improving' | 'new';
-        if (!baseline) {
+        if (!baseline || baselineReplyRate === 0) {
           health = 'new';
-        } else if (scoreChange <= -20) {
+        } else if (replyRateChange <= -50) {
+          // Critical: Reply rate dropped >50% week over week
           health = 'declining';
-        } else if (scoreChange <= -10 || bouncesChange > 5) {
+        } else if (replyRateChange <= -30) {
+          // High/Warning: Reply rate dropped 30-50% week over week
           health = 'warning';
-        } else if (scoreChange >= 20) {
+        } else if (replyRateChange >= 30) {
+          // Improving: Reply rate increased >30%
           health = 'improving';
         } else {
+          // Stable: Within ±30% of baseline
           health = 'stable';
         }
         
@@ -319,8 +332,9 @@ export async function GET(request: NextRequest) {
           // Current period stats
           current: {
             warmup_score: currentScore,
-            warmup_emails_sent: current.warmup_emails_sent ?? 0,
+            warmup_emails_sent: currentSent,
             warmup_replies_received: currentReplies,
+            warmup_reply_rate: Math.round(currentReplyRate * 100) / 100,
             warmup_emails_saved_from_spam: current.warmup_emails_saved_from_spam ?? 0,
             warmup_bounces_received_count: currentBounces,
             warmup_bounces_caused_count: current.warmup_bounces_caused_count ?? 0,
@@ -329,21 +343,25 @@ export async function GET(request: NextRequest) {
           // Baseline period stats (if available)
           baseline: baseline ? {
             warmup_score: baselineScore,
-            warmup_emails_sent: baseline.warmup_emails_sent ?? 0,
+            warmup_emails_sent: baselineSent,
             warmup_replies_received: baselineReplies,
+            warmup_reply_rate: Math.round(baselineReplyRate * 100) / 100,
             warmup_emails_saved_from_spam: baseline.warmup_emails_saved_from_spam ?? 0,
             warmup_bounces_received_count: baselineBounces,
             warmup_bounces_caused_count: baseline.warmup_bounces_caused_count ?? 0,
           } : null,
           
-          // Calculated changes
+          // Calculated changes - REPLY RATE is the key metric!
           changes: {
             warmup_score: Math.round(scoreChange * 10) / 10,
-            warmup_replies_received: Math.round(repliesChange * 10) / 10,
+            warmup_reply_rate: Math.round(replyRateChange * 10) / 10,
+            warmup_replies_received: baselineReplies > 0
+              ? Math.round(((currentReplies - baselineReplies) / baselineReplies) * 100 * 10) / 10
+              : 0,
             warmup_bounces_received_count: bouncesChange,
           },
           
-          // Health classification
+          // Health classification based on reply rate
           health,
         };
       });

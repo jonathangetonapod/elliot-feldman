@@ -155,7 +155,7 @@ function getHealthLabel(health: TrendHealth): { emoji: string; label: string; co
 }
 
 // ==========================================
-// 🔥 BURN RISK PREDICTION SYSTEM
+// 🔥 BURN RISK PREDICTION SYSTEM (REPLY RATE BASED)
 // ==========================================
 
 interface BurnRiskResult {
@@ -163,81 +163,79 @@ interface BurnRiskResult {
   level: 'critical' | 'high' | 'moderate' | 'low';
   emoji: string;  // 🔥🔥🔥, 🔥🔥, 🔥, or ✅
   reasons: string[];
+  replyRateChange: number | null;
+  currentReplyRate: number | null;
+  baselineReplyRate: number | null;
 }
 
-// Calculate burn risk for an account based on warmup API data
+// Calculate burn risk for an account based on REPLY RATE changes (NOT bounces!)
+// Burn Risk = Reply Rate dropping drastically week over week
 function calculateBurnRisk(warmup: WarmupAccountComparison | undefined): BurnRiskResult {
   if (!warmup) {
-    return { score: 0, level: 'low', emoji: '✅', reasons: [] };
+    return { score: 0, level: 'low', emoji: '✅', reasons: [], replyRateChange: null, currentReplyRate: null, baselineReplyRate: null };
   }
 
   let riskScore = 0;
   const reasons: string[] = [];
 
-  const currentScore = warmup.current.warmup_score;
-  const baselineScore = warmup.baseline?.warmup_score ?? currentScore;
-  const scoreChange = warmup.changes.warmup_score;
-  const bounces = warmup.current.warmup_bounces_received_count;
-  const bouncesChange = warmup.changes.warmup_bounces_received_count;
-  const replies = warmup.current.warmup_replies_received;
+  // REPLY RATE is the key metric for burn prediction!
+  const currentReplyRate = warmup.current.warmup_reply_rate ?? 0;
+  const baselineReplyRate = warmup.baseline?.warmup_reply_rate ?? 0;
+  const replyRateChange = warmup.changes.warmup_reply_rate ?? 0;
 
-  // Risk factor 1: Warmup score below 50 (+30)
-  if (currentScore < 50) {
-    riskScore += 30;
-    reasons.push(`Warmup score critically low (${currentScore}/100)`);
+  // Risk factor 1: Reply rate dropped >50% - CRITICAL (+50)
+  // 🔥🔥🔥 Critical: Reply rate dropped >50% week over week
+  if (replyRateChange <= -50) {
+    riskScore += 50;
+    reasons.push(`Reply Rate: Was ${baselineReplyRate.toFixed(1)}% → Now ${currentReplyRate.toFixed(1)}% (↓${Math.abs(Math.round(replyRateChange))}%)`);
+    reasons.push(`This account's reply rate dropped drastically`);
   }
-
-  // Risk factor 2: Warmup score dropped >30% (+30)
-  if (scoreChange < -30) {
-    riskScore += 30;
-    reasons.push(`Warmup score dropped ${Math.abs(Math.round(scoreChange))}% (was ${baselineScore} → now ${currentScore})`);
-  } else if (scoreChange < -20) {
-    // Lesser drop still concerning (+15)
-    riskScore += 15;
-    reasons.push(`Warmup score dropped ${Math.abs(Math.round(scoreChange))}%`);
+  // Risk factor 2: Reply rate dropped 30-50% - HIGH (+35)
+  // 🔥🔥 High: Reply rate dropped 30-50% week over week
+  else if (replyRateChange <= -30) {
+    riskScore += 35;
+    reasons.push(`Reply Rate: Was ${baselineReplyRate.toFixed(1)}% → Now ${currentReplyRate.toFixed(1)}% (↓${Math.abs(Math.round(replyRateChange))}%)`);
+    reasons.push(`Reply rate declining significantly`);
   }
-
-  // Risk factor 3: High bounces (>5) (+20)
-  if (bounces > 5) {
+  // Risk factor 3: Reply rate dropped 20-30% - MODERATE (+20)
+  // 🔥 Moderate: Reply rate dropped 20-30% week over week  
+  else if (replyRateChange <= -20) {
     riskScore += 20;
-    reasons.push(`${bounces} bounces received (high)`);
-  } else if (bounces > 2) {
-    riskScore += 10;
-    reasons.push(`${bounces} bounces received`);
+    reasons.push(`Reply Rate: Was ${baselineReplyRate.toFixed(1)}% → Now ${currentReplyRate.toFixed(1)}% (↓${Math.abs(Math.round(replyRateChange))}%)`);
   }
 
-  // Risk factor 4: Bounces increasing (+10)
-  if (bouncesChange > 0) {
-    riskScore += 10;
-    reasons.push(`Bounces increasing (+${bouncesChange} in period)`);
+  // Additional risk: Very low current reply rate (+20 if <1%)
+  if (currentReplyRate < 1 && warmup.current.warmup_emails_sent > 10) {
+    riskScore += 20;
+    reasons.push(`Current reply rate critically low (${currentReplyRate.toFixed(1)}%)`);
   }
 
-  // Risk factor 5: Zero replies (+10)
-  if (replies === 0) {
+  // Additional: Bounces increasing is a secondary indicator (+10)
+  const bouncesChange = warmup.changes.warmup_bounces_received_count;
+  if (bouncesChange > 3) {
     riskScore += 10;
-    reasons.push(`0 warmup replies received`);
-  }
-
-  // Additional: Already in declining state from API
-  if (warmup.health === 'declining') {
-    riskScore += 10;
-    reasons.push(`Account already flagged as declining`);
+    reasons.push(`Bounces also increasing (+${bouncesChange})`);
   }
 
   // Cap at 100
   riskScore = Math.min(100, riskScore);
 
-  // Determine level and emoji
+  // Determine level and emoji based on reply rate drop severity
   let level: 'critical' | 'high' | 'moderate' | 'low';
   let emoji: string;
   
-  if (riskScore >= 70) {
+  // 🔥🔥🔥 Critical: Reply rate dropped >50% week over week
+  if (riskScore >= 50 || replyRateChange <= -50) {
     level = 'critical';
     emoji = '🔥🔥🔥';
-  } else if (riskScore >= 50) {
+  } 
+  // 🔥🔥 High: Reply rate dropped 30-50% week over week
+  else if (riskScore >= 35 || replyRateChange <= -30) {
     level = 'high';
     emoji = '🔥🔥';
-  } else if (riskScore >= 30) {
+  } 
+  // 🔥 Moderate: Reply rate dropped 20-30% week over week
+  else if (riskScore >= 20 || replyRateChange <= -20) {
     level = 'moderate';
     emoji = '🔥';
   } else {
@@ -245,7 +243,15 @@ function calculateBurnRisk(warmup: WarmupAccountComparison | undefined): BurnRis
     emoji = '✅';
   }
 
-  return { score: riskScore, level, emoji, reasons };
+  return { 
+    score: riskScore, 
+    level, 
+    emoji, 
+    reasons,
+    replyRateChange,
+    currentReplyRate,
+    baselineReplyRate,
+  };
 }
 
 // Get CSS classes for burn risk level
@@ -844,39 +850,46 @@ function EmailsPageContent() {
   }, [apiEmails, warmupStatsMap]);
 
   // Calculate dropped accounts for selected time period
+  // Calculate dropped accounts based on REPLY RATE changes (not warmup score!)
+  // Burn Risk = Reply Rate dropping drastically week over week
   const droppedAccountsData = useMemo(() => {
     const allAccounts = Array.from(warmupStatsMap.values());
     
     // Filter accounts with baseline data (can compare)
-    const comparableAccounts = allAccounts.filter(a => a.baseline !== null);
+    const comparableAccounts = allAccounts.filter(a => a.baseline !== null && a.baseline.warmup_reply_rate !== undefined);
     
-    // Calculate percent change in warmup score
+    // Calculate percent change in REPLY RATE (not warmup score!)
     const withChanges = comparableAccounts.map(account => {
-      const change = account.changes.warmup_score;
-      const fromScore = account.baseline?.warmup_score ?? 0;
-      const toScore = account.current.warmup_score;
+      const change = account.changes.warmup_reply_rate ?? 0;
+      const fromRate = account.baseline?.warmup_reply_rate ?? 0;
+      const toRate = account.current.warmup_reply_rate ?? 0;
       return {
         ...account,
-        fromScore,
-        toScore,
+        fromScore: fromRate,  // Using "fromScore" for compatibility but it's actually reply rate
+        toScore: toRate,      // Using "toScore" for compatibility but it's actually reply rate
         percentChange: change,
       };
     });
     
-    // Significantly dropped (>20% drop)
-    const dropped = withChanges
-      .filter(a => a.percentChange < -20)
+    // 🔥🔥🔥 Critical: Reply rate dropped >50% week over week
+    const critical = withChanges
+      .filter(a => a.percentChange < -50)
       .sort((a, b) => a.percentChange - b.percentChange); // Most dropped first
     
-    // Warning (10-20% drop)
-    const warning = withChanges.filter(a => a.percentChange >= -20 && a.percentChange < -10);
+    // 🔥🔥 High: Reply rate dropped 30-50% week over week (LIKELY TO BURN!)
+    const dropped = withChanges
+      .filter(a => a.percentChange < -30)
+      .sort((a, b) => a.percentChange - b.percentChange); // Most dropped first
     
-    // Stable (within ±10%)
-    const stable = withChanges.filter(a => a.percentChange >= -10 && a.percentChange <= 10);
+    // 🔥 Moderate: Reply rate dropped 20-30% week over week
+    const warning = withChanges.filter(a => a.percentChange >= -30 && a.percentChange < -20);
     
-    // Improved (>10% up)
+    // Stable (within ±20%)
+    const stable = withChanges.filter(a => a.percentChange >= -20 && a.percentChange <= 20);
+    
+    // Improved (>20% up)
     const improved = withChanges
-      .filter(a => a.percentChange > 10)
+      .filter(a => a.percentChange > 20)
       .sort((a, b) => b.percentChange - a.percentChange); // Most improved first
     
     // Calculate average change
@@ -885,8 +898,9 @@ function EmailsPageContent() {
       : 0;
     
     return {
-      dropped,
-      warning,
+      critical,  // NEW: Critical risk accounts (>50% drop)
+      dropped,   // Likely to burn (>30% drop)
+      warning,   // Moderate risk (20-30% drop)
       stable,
       improved,
       total: comparableAccounts.length,
@@ -1547,80 +1561,96 @@ function EmailsPageContent() {
       </div>
 
       {/* At Risk & Warning Accounts - Using Bison warmup API data */}
+      {/* 🔥 LIKELY TO BURN SECTION - Based on Reply Rate Week Over Week */}
       {(droppedAccountsData.dropped.length > 0 || droppedAccountsData.warning.length > 0) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-          {/* Dropped Significantly */}
+          {/* 🔥🔥 Likely to Burn: Reply rate dropped >30% */}
           {droppedAccountsData.dropped.length > 0 && (
-            <Card className="border-red-200">
+            <Card className="border-2 border-red-400 bg-gradient-to-br from-red-50 to-red-100">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm lg:text-base flex items-center gap-2">
-                  🔴 Dropped &gt;20%
-                  <Badge variant="outline" className="ml-auto text-xs border-red-200 text-red-700">
-                    {droppedAccountsData.dropped.length}
+                  🔥🔥 Likely to Burn
+                  <Badge variant="destructive" className="ml-auto">
+                    {droppedAccountsData.dropped.length} accounts
                   </Badge>
                 </CardTitle>
+                <p className="text-xs text-red-600">Reply rate dropped &gt;30% week over week</p>
               </CardHeader>
               <CardContent className="pt-0">
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {droppedAccountsData.dropped.slice(0, 5).map((account) => (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {droppedAccountsData.dropped.slice(0, 8).map((account) => (
                     <div
                       key={account.id}
-                      className="p-2 rounded-lg bg-red-50 border border-red-100 text-sm cursor-pointer hover:bg-red-100"
+                      className="p-3 rounded-lg bg-white border border-red-200 text-sm cursor-pointer hover:bg-red-50 transition-colors"
                       onClick={() => {
                         const email = apiEmails?.find(e => e.email.toLowerCase() === account.email.toLowerCase());
                         if (email) openAccountDetail(email);
                       }}
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium truncate flex-1">{account.email}</span>
-                        <span className="text-red-600 text-xs ml-2">↓{Math.abs(Math.round(account.percentChange))}%</span>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold text-red-700 truncate flex-1">
+                          {account.percentChange <= -50 ? '🔥🔥🔥' : '🔥🔥'} {account.email}
+                        </span>
                       </div>
-                      <div className="text-xs text-gray-500">Was {account.fromScore} → Now {account.toScore}</div>
+                      <div className="text-sm font-medium text-red-600">
+                        Reply Rate: Was {typeof account.fromScore === 'number' ? account.fromScore.toFixed(1) : account.fromScore}% → Now {typeof account.toScore === 'number' ? account.toScore.toFixed(1) : account.toScore}% 
+                        <span className="ml-1 font-bold">(↓{Math.abs(Math.round(account.percentChange))}%)</span>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">This account&apos;s reply rate dropped drastically</div>
                     </div>
                   ))}
-                  {droppedAccountsData.dropped.length > 5 && (
-                    <div className="text-xs text-center text-gray-500">
-                      +{droppedAccountsData.dropped.length - 5} more
-                    </div>
+                  {droppedAccountsData.dropped.length > 8 && (
+                    <button 
+                      className="w-full text-sm text-red-600 hover:text-red-800 underline py-2"
+                      onClick={() => handleQuickFilter("declining")}
+                    >
+                      View all {droppedAccountsData.dropped.length} at-risk accounts →
+                    </button>
                   )}
                 </div>
               </CardContent>
             </Card>
           )}
 
-          {/* Warning (10-20% drop) */}
+          {/* 🔥 Warning: Reply rate dropped 20-30% */}
           {droppedAccountsData.warning.length > 0 && (
-            <Card className="border-yellow-200">
+            <Card className="border-2 border-yellow-400 bg-gradient-to-br from-yellow-50 to-yellow-100">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm lg:text-base flex items-center gap-2">
-                  🟡 Warning (10-20% drop)
-                  <Badge variant="outline" className="ml-auto text-xs border-yellow-200 text-yellow-700">
-                    {droppedAccountsData.warning.length}
+                  🔥 Moderate Risk
+                  <Badge variant="outline" className="ml-auto border-yellow-400 text-yellow-700">
+                    {droppedAccountsData.warning.length} accounts
                   </Badge>
                 </CardTitle>
+                <p className="text-xs text-yellow-700">Reply rate dropped 20-30% week over week</p>
               </CardHeader>
               <CardContent className="pt-0">
-                <div className="space-y-2 max-h-48 overflow-y-auto">
+                <div className="space-y-2 max-h-64 overflow-y-auto">
                   {droppedAccountsData.warning.slice(0, 5).map((account) => (
                     <div
                       key={account.id}
-                      className="p-2 rounded-lg bg-yellow-50 border border-yellow-100 text-sm cursor-pointer hover:bg-yellow-100"
+                      className="p-3 rounded-lg bg-white border border-yellow-200 text-sm cursor-pointer hover:bg-yellow-50 transition-colors"
                       onClick={() => {
                         const email = apiEmails?.find(e => e.email.toLowerCase() === account.email.toLowerCase());
                         if (email) openAccountDetail(email);
                       }}
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium truncate flex-1">{account.email}</span>
-                        <span className="text-yellow-600 text-xs ml-2">↓{Math.abs(Math.round(account.percentChange))}%</span>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold text-yellow-700 truncate flex-1">🔥 {account.email}</span>
                       </div>
-                      <div className="text-xs text-gray-500">Was {account.fromScore} → Now {account.toScore}</div>
+                      <div className="text-sm font-medium text-yellow-600">
+                        Reply Rate: Was {typeof account.fromScore === 'number' ? account.fromScore.toFixed(1) : account.fromScore}% → Now {typeof account.toScore === 'number' ? account.toScore.toFixed(1) : account.toScore}%
+                        <span className="ml-1 font-bold">(↓{Math.abs(Math.round(account.percentChange))}%)</span>
+                      </div>
                     </div>
                   ))}
                   {droppedAccountsData.warning.length > 5 && (
-                    <div className="text-xs text-center text-gray-500">
-                      +{droppedAccountsData.warning.length - 5} more
-                    </div>
+                    <button 
+                      className="w-full text-sm text-yellow-600 hover:text-yellow-800 underline py-2"
+                      onClick={() => handleQuickFilter("warning")}
+                    >
+                      View all {droppedAccountsData.warning.length} warning accounts →
+                    </button>
                   )}
                 </div>
               </CardContent>
@@ -1658,87 +1688,95 @@ function EmailsPageContent() {
         </CardContent>
       </Card>
 
-      {/* Summary Stats for Selected Period */}
+      {/* Summary Stats for Selected Period - REPLY RATE BASED */}
       <Card className="mb-6 bg-gray-50">
         <CardContent className="pt-4 px-4 pb-4">
           <div className="text-sm font-semibold text-gray-700 mb-3">
-            📊 In the last {selectedTimePeriod} days:
+            📊 Reply Rate Changes in the last {selectedTimePeriod} days:
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-            <div className={`p-3 rounded-lg text-center ${droppedAccountsData.dropped.length > 0 ? 'bg-red-100 border border-red-200' : 'bg-gray-100'}`}>
+            <div className={`p-3 rounded-lg text-center cursor-pointer transition-all hover:scale-105 ${droppedAccountsData.dropped.length > 0 ? 'bg-red-100 border-2 border-red-300' : 'bg-gray-100'}`}
+                 onClick={() => droppedAccountsData.dropped.length > 0 && handleQuickFilter("declining")}>
               <div className={`text-2xl font-bold ${droppedAccountsData.dropped.length > 0 ? 'text-red-600' : 'text-gray-600'}`}>
                 {droppedAccountsData.dropped.length}
               </div>
-              <div className="text-xs text-gray-600">🔴 Dropped Significantly</div>
-              <div className="text-xs text-gray-400">(&gt;20% drop)</div>
+              <div className="text-xs text-gray-600">🔥🔥 Likely to Burn</div>
+              <div className="text-xs text-red-500 font-medium">(&gt;30% reply rate drop)</div>
             </div>
-            <div className={`p-3 rounded-lg text-center ${droppedAccountsData.warning.length > 0 ? 'bg-yellow-100 border border-yellow-200' : 'bg-gray-100'}`}>
+            <div className={`p-3 rounded-lg text-center cursor-pointer transition-all hover:scale-105 ${droppedAccountsData.warning.length > 0 ? 'bg-yellow-100 border-2 border-yellow-300' : 'bg-gray-100'}`}
+                 onClick={() => droppedAccountsData.warning.length > 0 && handleQuickFilter("warning")}>
               <div className={`text-2xl font-bold ${droppedAccountsData.warning.length > 0 ? 'text-yellow-600' : 'text-gray-600'}`}>
                 {droppedAccountsData.warning.length}
               </div>
-              <div className="text-xs text-gray-600">🟡 Warning</div>
-              <div className="text-xs text-gray-400">(10-20% drop)</div>
+              <div className="text-xs text-gray-600">🔥 Moderate Risk</div>
+              <div className="text-xs text-yellow-600 font-medium">(20-30% reply rate drop)</div>
             </div>
-            <div className="p-3 rounded-lg text-center bg-green-100 border border-green-200">
+            <div className="p-3 rounded-lg text-center bg-green-100 border border-green-200 cursor-pointer transition-all hover:scale-105"
+                 onClick={() => handleQuickFilter("stable")}>
               <div className="text-2xl font-bold text-green-600">
                 {droppedAccountsData.stable.length}
               </div>
               <div className="text-xs text-gray-600">🟢 Stable</div>
-              <div className="text-xs text-gray-400">(within ±10%)</div>
+              <div className="text-xs text-green-600">(within ±20%)</div>
             </div>
-            <div className="p-3 rounded-lg text-center bg-blue-100 border border-blue-200">
+            <div className="p-3 rounded-lg text-center bg-blue-100 border border-blue-200 cursor-pointer transition-all hover:scale-105"
+                 onClick={() => handleQuickFilter("improving")}>
               <div className="text-2xl font-bold text-blue-600">
                 {droppedAccountsData.improved.length}
               </div>
-              <div className="text-xs text-gray-600">📈 Improved</div>
-              <div className="text-xs text-gray-400">(&gt;10% up)</div>
+              <div className="text-xs text-gray-600">📈 Improving</div>
+              <div className="text-xs text-blue-600">(&gt;20% reply rate up)</div>
             </div>
             <div className="p-3 rounded-lg text-center bg-purple-100 border border-purple-200">
               <div className={`text-2xl font-bold ${droppedAccountsData.avgChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                 {droppedAccountsData.avgChange >= 0 ? '+' : ''}{droppedAccountsData.avgChange}%
               </div>
-              <div className="text-xs text-gray-600">📉 Avg Change</div>
+              <div className="text-xs text-gray-600">📉 Avg Reply Rate Change</div>
               <div className="text-xs text-gray-400">(all accounts)</div>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Dropped Significantly Section - Only show if there are dropped accounts */}
+      {/* 🔥🔥🔥 LIKELY TO BURN - Reply Rate Dropped Significantly */}
       {droppedAccountsData.dropped.length > 0 && (
-        <Card className="mb-6 border-2 border-red-300 bg-gradient-to-r from-red-50 to-white">
+        <Card className="mb-6 border-2 border-red-400 bg-gradient-to-r from-red-100 to-red-50">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg flex items-center gap-2">
-              <span className="text-2xl">🚨</span>
-              Dropped Significantly in Last {selectedTimePeriod} Days
+              <span className="text-2xl">🔥🔥</span>
+              Likely to Burn - Reply Rate Dropping in Last {selectedTimePeriod} Days
               <Badge variant="destructive" className="ml-2 text-base px-3 py-1">
-                {droppedAccountsData.dropped.length} accounts
+                {droppedAccountsData.dropped.length} accounts at risk
               </Badge>
             </CardTitle>
+            <p className="text-sm text-red-600 mt-1">
+              These accounts have reply rates dropping &gt;30% week over week - high burn risk!
+            </p>
           </CardHeader>
           <CardContent className="pt-0">
-            <div className="space-y-2">
+            <div className="space-y-3">
               {droppedAccountsData.dropped.slice(0, 10).map((account) => (
                 <div
                   key={account.id}
-                  className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-red-50 border border-red-200 hover:bg-red-100 transition-colors cursor-pointer"
+                  className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-white border-2 border-red-300 hover:bg-red-50 transition-colors cursor-pointer shadow-sm"
                   onClick={() => {
                     const email = apiEmails?.find(e => e.email.toLowerCase() === account.email.toLowerCase());
                     if (email) openAccountDetail(email);
                   }}
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium text-sm truncate">{account.email}</div>
-                    <div className="text-xs text-gray-500">{account.name || account.email.split('@')[0]}</div>
-                  </div>
-                  <div className="flex items-center gap-3 mt-2 sm:mt-0">
-                    <div className="text-sm text-gray-600">
-                      <span className="font-medium">{account.fromScore}</span>
-                      <span className="mx-1">→</span>
-                      <span className="font-medium">{account.toScore}</span>
+                    <div className="font-bold text-red-700 text-sm truncate flex items-center gap-2">
+                      {account.percentChange <= -50 ? '🔥🔥🔥 CRITICAL:' : '🔥🔥 HIGH RISK:'} {account.email}
                     </div>
-                    <Badge variant="destructive" className="whitespace-nowrap text-sm px-2 py-0.5">
-                      ↓ {Math.abs(Math.round(account.percentChange))}%
+                    <div className="text-sm text-red-600 mt-1 font-medium">
+                      Reply Rate: Was {typeof account.fromScore === 'number' ? account.fromScore.toFixed(1) : account.fromScore}% → Now {typeof account.toScore === 'number' ? account.toScore.toFixed(1) : account.toScore}%
+                      <span className="font-bold ml-1">(↓{Math.abs(Math.round(account.percentChange))}%)</span>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">This account&apos;s reply rate dropped drastically</div>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2 sm:mt-0">
+                    <Badge variant="destructive" className="whitespace-nowrap text-base px-3 py-1">
+                      {account.percentChange <= -50 ? '🔥🔥🔥' : '🔥🔥'} ↓{Math.abs(Math.round(account.percentChange))}%
                     </Badge>
                   </div>
                 </div>
@@ -1747,9 +1785,9 @@ function EmailsPageContent() {
                 <div className="text-center py-2">
                   <button
                     onClick={() => handleQuickFilter("declining")}
-                    className="text-sm text-red-600 hover:text-red-800 underline"
+                    className="text-sm text-red-600 hover:text-red-800 underline font-medium"
                   >
-                    View all {droppedAccountsData.dropped.length} dropped accounts →
+                    View all {droppedAccountsData.dropped.length} at-risk accounts →
                   </button>
                 </div>
               )}
@@ -1797,7 +1835,7 @@ function EmailsPageContent() {
         </Card>
       )}
 
-      {/* Quick Filter Buttons - Trend-based */}
+      {/* Quick Filter Buttons - Based on Reply Rate Changes */}
       <div className="flex flex-wrap gap-2 mb-4">
         <button
           onClick={() => handleQuickFilter("all")}
@@ -1817,7 +1855,7 @@ function EmailsPageContent() {
               : "bg-red-100 text-red-700 hover:bg-red-200"
           }`}
         >
-          🔴 Declining ({filterCounts.declining})
+          🔥🔥 Show Declining ({filterCounts.declining})
         </button>
         <button
           onClick={() => handleQuickFilter("warning")}
@@ -1827,7 +1865,7 @@ function EmailsPageContent() {
               : "bg-yellow-100 text-yellow-700 hover:bg-yellow-200"
           }`}
         >
-          🟡 Warning ({filterCounts.warning})
+          🔥 Moderate Risk ({filterCounts.warning})
         </button>
         <button
           onClick={() => handleQuickFilter("stable")}
