@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { getEmails, type EmailStatus, type WarmupStatus, type SenderEmail } from "@/lib/mock-data";
+import { exportToCSV, EMAIL_ACCOUNTS_COLUMNS } from "@/lib/export-csv";
 
 interface BisonSenderEmail {
   id: number;
@@ -261,10 +262,10 @@ function EmailsPageContent() {
   }, [statusFilter, warmupFilter]);
 
   // Filter and paginate emails
-  const { data: emails, total, totalPages } = useMemo(() => {
+  const { data: emails, total, totalPages, filteredData } = useMemo(() => {
     // Use mock data if API data not available
     if (apiEmails === null) {
-      return getEmails({
+      const result = getEmails({
         page,
         pageSize,
         search,
@@ -273,6 +274,17 @@ function EmailsPageContent() {
         sortBy: "replyRate",
         sortOrder: "asc",
       });
+      // For mock data, get all filtered data for export
+      const allFiltered = getEmails({
+        page: 1,
+        pageSize: 10000,
+        search,
+        status: statusFilter,
+        warmupStatus: warmupFilter === "on" ? "ready" : warmupFilter === "off" ? "paused" : "all",
+        sortBy: "replyRate",
+        sortOrder: "asc",
+      });
+      return { ...result, filteredData: allFiltered.data };
     }
     
     // Filter API data locally
@@ -326,8 +338,26 @@ function EmailsPageContent() {
     const start = (page - 1) * pageSize;
     const data = filteredEmails.slice(start, start + pageSize);
     
-    return { data, total, page, pageSize, totalPages };
+    return { data, total, page, pageSize, totalPages, filteredData: filteredEmails };
   }, [apiEmails, page, pageSize, search, statusFilter, warmupFilter, sortBy, sortOrder]);
+
+  // Export handler
+  const handleExportCSV = useCallback(() => {
+    // Prepare data for export - use filteredData (all filtered, not just current page)
+    const exportData = filteredData.map((email: DisplayEmail) => ({
+      email: email.email,
+      name: email.name,
+      domain: email.domain,
+      status: email.status,
+      warmupEnabled: email.warmupEnabled !== false && email.warmupStatus !== "paused" ? "ON" : "OFF",
+      dailyLimit: email.dailyLimit,
+      totalSent: email.totalSent || email.sentLast7Days,
+      totalReplies: email.totalReplies || email.repliesLast7Days,
+      replyRate: email.replyRate,
+    }));
+    
+    exportToCSV(exportData, "email-accounts", EMAIL_ACCOUNTS_COLUMNS);
+  }, [filteredData]);
 
   const getStatusBadge = (status: EmailStatus) => {
     switch (status) {
@@ -385,12 +415,23 @@ function EmailsPageContent() {
 
   return (
     <div className="p-4 lg:p-8">
-      <div className="mb-6 lg:mb-8">
-        <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Email Accounts</h1>
-        <p className="text-gray-500 mt-1 text-sm lg:text-base">
-          Monitor warmup and reply rates for {summaryStats.total.toLocaleString()} sender emails
-          {usingMockData && <span className="text-orange-500 ml-2">(Demo Mode)</span>}
-        </p>
+      <div className="mb-6 lg:mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Email Accounts</h1>
+          <p className="text-gray-500 mt-1 text-sm lg:text-base">
+            Monitor warmup and reply rates for {summaryStats.total.toLocaleString()} sender emails
+            {usingMockData && <span className="text-orange-500 ml-2">(Demo Mode)</span>}
+          </p>
+        </div>
+        <Button 
+          onClick={handleExportCSV}
+          variant="outline"
+          size="sm"
+          disabled={total === 0}
+          className="shrink-0"
+        >
+          Export CSV
+        </Button>
       </div>
 
       {/* Stats Summary Bar */}

@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getMockDashboardStats, getMockDomainHealth, generateMockEmails } from "@/lib/mock-data";
 import { useBisonData } from "@/lib/use-bison-data";
+import { Recommendations } from "@/components/recommendations";
 import { useState, useEffect } from "react";
 
 // Helper to format time ago
@@ -266,6 +267,11 @@ export default function Dashboard() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Smart Recommendations */}
+          <div className="mb-6 lg:mb-8">
+            <Recommendations emails={emails} domains={domains} maxItems={5} />
+          </div>
 
           {/* Account Health Section */}
           <div className="mb-6 lg:mb-8">

@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { getMockDomainHealth, DomainHealth } from "@/lib/mock-data";
+import { exportToCSV, DOMAINS_COLUMNS } from "@/lib/export-csv";
 
 type DataMode = "live" | "demo";
 
@@ -179,6 +180,24 @@ export default function DomainsPage() {
     highSpam: allDomains.filter(d => d.spamScore > 5).length,
   };
 
+  // Export handler
+  const handleExportCSV = useCallback(() => {
+    // Prepare data for export - use filtered domains
+    const exportData = domains.map((domain) => ({
+      domain: domain.domain,
+      totalEmails: domain.totalEmails,
+      healthyEmails: domain.healthyEmails,
+      warningEmails: domain.warningEmails,
+      burnedEmails: domain.burnedEmails,
+      spfValid: domain.spfValid ? "Yes" : "No",
+      dkimValid: domain.dkimValid ? "Yes" : "No",
+      dmarcValid: domain.dmarcValid ? "Yes" : "No",
+      spamScore: domain.spamScore,
+    }));
+    
+    exportToCSV(exportData, "domains", DOMAINS_COLUMNS);
+  }, [domains]);
+
   return (
     <div className="p-4 lg:p-8">
       <div className="mb-6 lg:mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -199,6 +218,14 @@ export default function DomainsPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button 
+            onClick={handleExportCSV}
+            variant="outline"
+            size="sm"
+            disabled={domains.length === 0}
+          >
+            Export CSV
+          </Button>
           <Button 
             onClick={syncDomains}
             variant="outline"
