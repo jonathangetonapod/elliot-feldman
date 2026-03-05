@@ -2,19 +2,34 @@
 
 import { useState, useEffect, useMemo, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import { getEmails, type WarmupStatus, type SenderEmail } from "@/lib/mock-data";
 import { toast } from "sonner";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import {
+  PieChart,
+  Pie,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+} from "recharts";
 import {
   takeSnapshot,
   calculateAccountTrend,
   getDaysActive,
   analyzeAccountTrend,
   getHealthLabel,
+  getOverallReplyRateTrend,
+  predictAtRiskAccounts,
+  getRecentlyDegraded,
   type AccountTrend,
   type TrendHealth,
   type HistoricalTrendAnalysis,
@@ -322,6 +337,54 @@ function MiniHealthPie({ stats }: { stats: { declining: number; warning: number;
   );
 }
 
+// Trend Distribution Pie Chart (larger version)
+function TrendDistributionChart({ stats }: { stats: { declining: number; warning: number; stable: number; improving: number; gatheringData: number } }) {
+  const data = [
+    { name: "Stable", value: stats.stable, color: "#22c55e" },
+    { name: "Improving", value: stats.improving, color: "#3b82f6" },
+    { name: "Warning", value: stats.warning, color: "#eab308" },
+    { name: "Declining", value: stats.declining, color: "#ef4444" },
+    { name: "New", value: stats.gatheringData, color: "#9ca3af" },
+  ].filter(d => d.value > 0);
+  
+  const total = data.reduce((sum, d) => sum + d.value, 0);
+  
+  return (
+    <div className="flex items-center gap-4">
+      <div className="w-32 h-32">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={data}
+              cx="50%"
+              cy="50%"
+              innerRadius={30}
+              outerRadius={55}
+              dataKey="value"
+              strokeWidth={2}
+              stroke="#fff"
+            >
+              {data.map((entry, index) => (
+                <Cell key={`cell-${index}`} fill={entry.color} />
+              ))}
+            </Pie>
+            <Tooltip formatter={(value, name) => [`${value} (${Math.round((value as number) / total * 100)}%)`, name]} />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="flex flex-col gap-1.5 text-sm">
+        {data.map((item) => (
+          <div key={item.name} className="flex items-center gap-2">
+            <span className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }}></span>
+            <span className="text-gray-600">{item.name}:</span>
+            <span className="font-medium">{item.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function EmailsPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -346,8 +409,22 @@ function EmailsPageContent() {
   const [usingMockData, setUsingMockData] = useState(false);
   const [trendAnalysisMap, setTrendAnalysisMap] = useState<Map<number, HistoricalTrendAnalysis>>(new Map());
   
+  // Trends data
+  const [overallTrend, setOverallTrend] = useState<ReturnType<typeof getOverallReplyRateTrend>>([]);
+  const [atRiskAccounts, setAtRiskAccounts] = useState<ReturnType<typeof predictAtRiskAccounts>>([]);
+  const [recentlyDegraded, setRecentlyDegraded] = useState<Array<{
+    accountId: number;
+    email: string;
+    fromStatus: TrendHealth;
+    toStatus: TrendHealth;
+    percentDrop: number;
+  }>>([]);
+  
   // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  
+  // Charts visibility toggle
+  const [showCharts, setShowCharts] = useState(true);
   
   const pageSize = 25;
 
@@ -446,6 +523,11 @@ function EmailsPageContent() {
       }
     }
     setTrendAnalysisMap(analysisMap);
+    
+    // Load trends data
+    setOverallTrend(getOverallReplyRateTrend());
+    setAtRiskAccounts(predictAtRiskAccounts(7));
+    setRecentlyDegraded(getRecentlyDegraded(7));
   }, [loading, apiEmails]);
 
   // Calculate stats for the summary bar - now trend-based
@@ -705,7 +787,7 @@ function EmailsPageContent() {
     return (
       <div className="p-4 lg:p-8">
         <div className="mb-6 lg:mb-8">
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">📧 Email Accounts</h1>
+          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">📧 Accounts</h1>
           <p className="text-gray-500 mt-1 text-sm lg:text-base">Loading sender emails...</p>
         </div>
         <Card>
@@ -720,18 +802,86 @@ function EmailsPageContent() {
     );
   }
 
+  // Calculate history days
+  const historyDays = overallTrend.length;
+
   return (
     <div className="p-4 lg:p-8 pb-24 lg:pb-8">
+      {/* Header */}
       <div className="mb-6 lg:mb-8">
-        <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">📧 Email Accounts</h1>
-        <p className="text-gray-500 mt-1 text-sm lg:text-base">
-          Monitor warmup and reply rates for {summaryStats.total.toLocaleString()} sender emails
-          {usingMockData && <span className="text-orange-500 ml-2">(Demo Mode)</span>}
-        </p>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">📧 Accounts</h1>
+            <p className="text-gray-500 mt-1 text-sm lg:text-base">
+              Monitor account health and performance trends for {summaryStats.total.toLocaleString()} sender emails
+              {usingMockData && <span className="text-orange-500 ml-2">(Demo Mode)</span>}
+            </p>
+          </div>
+          <Badge variant="outline" className="text-xs w-fit">
+            {historyDays} day{historyDays !== 1 ? 's' : ''} of history
+          </Badge>
+        </div>
       </div>
 
-      {/* Visual Stats Summary Cards */}
+      {/* Overview Summary - Trend Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
+        {/* Trend Summary Card */}
+        <Card className="col-span-2 lg:col-span-1 bg-gradient-to-br from-indigo-50 to-indigo-100 border-indigo-200 hover:shadow-lg transition-shadow">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-2xl">📊</span>
+              <span className="text-xs text-indigo-600 uppercase tracking-wide font-medium">Trend Summary</span>
+            </div>
+            <div className="text-sm space-y-1">
+              <div className="flex justify-between">
+                <span className="text-red-600">🔴 Declining</span>
+                <span className="font-bold">{summaryStats.declining}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-green-600">🟢 Stable</span>
+                <span className="font-bold">{summaryStats.stable}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-blue-600">📈 Improving</span>
+                <span className="font-bold">{summaryStats.improving}</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Average Reply Rate Trend Card */}
+        <Card className="col-span-1 bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200 hover:shadow-lg transition-shadow">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-2xl">💬</span>
+              <span className="text-xs text-blue-600 uppercase tracking-wide font-medium">Avg Reply</span>
+            </div>
+            <div className="text-2xl font-bold text-blue-600">
+              {summaryStats.avgReplyRate}%
+            </div>
+            <div className="text-xs text-gray-400">across all accounts</div>
+          </CardContent>
+        </Card>
+
+        {/* At Risk Card */}
+        <Card className={`col-span-1 hover:shadow-lg transition-shadow ${
+          atRiskAccounts.length === 0 ? "bg-gradient-to-br from-green-50 to-green-100 border-green-200" :
+          "bg-gradient-to-br from-red-50 to-red-100 border-red-200"
+        }`}>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-2xl">{atRiskAccounts.length === 0 ? "✅" : "⚠️"}</span>
+              <span className={`text-xs uppercase tracking-wide font-medium ${
+                atRiskAccounts.length === 0 ? "text-green-600" : "text-red-600"
+              }`}>At Risk</span>
+            </div>
+            <div className={`text-2xl font-bold ${atRiskAccounts.length === 0 ? "text-green-600" : "text-red-600"}`}>
+              {atRiskAccounts.length}
+            </div>
+            <div className="text-xs text-gray-400">may decline further</div>
+          </CardContent>
+        </Card>
+
         {/* Warmup Status Card */}
         <Card className="col-span-1 bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200 hover:shadow-lg transition-shadow">
           <CardContent className="p-4">
@@ -739,33 +889,12 @@ function EmailsPageContent() {
               <span className="text-2xl">🔥</span>
               <span className="text-xs text-orange-600 uppercase tracking-wide font-medium">Warmup</span>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <div className="text-2xl font-bold text-green-600">{summaryStats.warmupOn}</div>
               <span className="text-gray-400">/</span>
               <div className="text-lg text-gray-400">{summaryStats.warmupOff}</div>
             </div>
-            <div className="text-xs text-gray-500">ON / OFF</div>
-            {/* Mini progress bar */}
-            <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-orange-500 rounded-full"
-                style={{ width: `${(summaryStats.warmupOn / summaryStats.total) * 100}%` }}
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Reply Rate Card */}
-        <Card className="col-span-1 bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200 hover:shadow-lg transition-shadow">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl">💬</span>
-              <span className="text-xs text-blue-600 uppercase tracking-wide font-medium">Avg Reply Rate</span>
-            </div>
-            <div className="text-2xl font-bold text-blue-600">
-              {summaryStats.avgReplyRate}%
-            </div>
-            <div className="text-xs text-gray-400">across all accounts</div>
+            <div className="text-xs text-gray-400">ON / OFF</div>
           </CardContent>
         </Card>
 
@@ -787,54 +916,163 @@ function EmailsPageContent() {
             <div className="text-xs text-gray-400">&gt;50% drop from baseline</div>
           </CardContent>
         </Card>
-
-        {/* Stable/Improving Card */}
-        <Card className="col-span-1 bg-gradient-to-br from-green-50 to-green-100 border-green-200 hover:shadow-lg transition-shadow">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl">🟢</span>
-              <span className="text-xs text-green-600 uppercase tracking-wide font-medium">Stable / 📈 Improving</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="text-2xl font-bold text-green-600">{summaryStats.stable}</div>
-              <span className="text-gray-400">/</span>
-              <div className="text-lg text-blue-600">{summaryStats.improving}</div>
-            </div>
-            <div className="text-xs text-gray-400">performing well</div>
-          </CardContent>
-        </Card>
-
-        {/* Health Distribution Card with Mini Pie */}
-        <Card className="col-span-2 lg:col-span-1 hover:shadow-lg transition-shadow">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl">📊</span>
-              <span className="text-xs text-gray-600 uppercase tracking-wide font-medium">Health</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <MiniHealthPie stats={filterCounts} />
-              <div className="flex flex-col text-xs gap-1">
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                  🟢 {filterCounts.stable}
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                  📈 {filterCounts.improving}
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
-                  🟡 {filterCounts.warning}
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                  🔴 {filterCounts.declining}
-                </span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
       </div>
+
+      {/* Charts Section - Collapsible */}
+      <div className="mb-6">
+        <button
+          onClick={() => setShowCharts(!showCharts)}
+          className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-gray-900 mb-3"
+        >
+          <span>{showCharts ? '▼' : '▶'}</span>
+          <span>📈 Trend Charts</span>
+        </button>
+        
+        {showCharts && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Reply Rate Over Time */}
+            <Card>
+              <CardHeader className="pb-2 px-3 lg:px-6">
+                <CardTitle className="text-sm lg:text-lg flex items-center gap-2">
+                  💬 Reply Rate Over Time
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-2 lg:px-6">
+                {overallTrend.length > 1 ? (
+                  <div className="h-48">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={overallTrend} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <XAxis 
+                          dataKey="date" 
+                          tickFormatter={(value) => new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          tick={{ fontSize: 9 }}
+                        />
+                        <YAxis 
+                          tickFormatter={(value) => `${value}%`}
+                          tick={{ fontSize: 9 }}
+                          domain={[0, 'auto']}
+                          width={35}
+                        />
+                        <Tooltip 
+                          formatter={(value) => [`${(value as number)?.toFixed(2) ?? 0}%`, 'Avg Reply Rate']}
+                          labelFormatter={(label) => new Date(label as string).toLocaleDateString()}
+                        />
+                        <Line 
+                          type="monotone" 
+                          dataKey="avgRate" 
+                          stroke="#3b82f6" 
+                          strokeWidth={2}
+                          dot={{ fill: '#3b82f6', strokeWidth: 2, r: 3 }}
+                          activeDot={{ r: 5 }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <div className="h-48 flex items-center justify-center text-gray-500">
+                    <div className="text-center">
+                      <span className="text-3xl block mb-2">📊</span>
+                      <p className="text-sm">Chart will appear after 2+ days of data</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Trend Distribution */}
+            <Card>
+              <CardHeader className="pb-2 px-3 lg:px-6">
+                <CardTitle className="text-sm lg:text-lg flex items-center gap-2">
+                  📊 Account Health Distribution
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-3 lg:px-6">
+                <TrendDistributionChart stats={filterCounts} />
+              </CardContent>
+            </Card>
+          </div>
+        )}
+      </div>
+
+      {/* At Risk & Recently Degraded (Collapsed by default on mobile) */}
+      {(atRiskAccounts.length > 0 || recentlyDegraded.length > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+          {/* At Risk Accounts */}
+          {atRiskAccounts.length > 0 && (
+            <Card className="border-red-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm lg:text-base flex items-center gap-2">
+                  ⚠️ At Risk Accounts
+                  <Badge variant="outline" className="ml-auto text-xs border-red-200 text-red-700">
+                    {atRiskAccounts.length}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {atRiskAccounts.slice(0, 5).map((account) => (
+                    <div 
+                      key={account.accountId}
+                      className="p-2 rounded-lg bg-red-50 border border-red-100 text-sm"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium truncate flex-1">{account.email}</span>
+                        <span className="text-red-600 text-xs ml-2">{account.currentReplyRate}%</span>
+                      </div>
+                      <div className="text-xs text-gray-500 truncate">{account.reason}</div>
+                    </div>
+                  ))}
+                  {atRiskAccounts.length > 5 && (
+                    <div className="text-xs text-center text-gray-500">
+                      +{atRiskAccounts.length - 5} more
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Recently Degraded */}
+          {recentlyDegraded.length > 0 && (
+            <Card className="border-yellow-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm lg:text-base flex items-center gap-2">
+                  📉 Recently Degraded
+                  <Badge variant="outline" className="ml-auto text-xs border-yellow-200 text-yellow-700">
+                    {recentlyDegraded.length}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {recentlyDegraded.slice(0, 5).map((item, index) => {
+                    const healthInfo = getHealthLabel(item.toStatus);
+                    return (
+                      <div 
+                        key={`${item.accountId}-${index}`}
+                        className="p-2 rounded-lg bg-yellow-50 border border-yellow-100 text-sm"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium truncate flex-1">{item.email}</span>
+                          <span className={`text-xs ml-2 ${healthInfo.color}`}>
+                            {healthInfo.emoji} ↓{item.percentDrop}%
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {recentlyDegraded.length > 5 && (
+                    <div className="text-xs text-center text-gray-500">
+                      +{recentlyDegraded.length - 5} more
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
 
       {/* Quick Filter Buttons - Trend-based */}
       <div className="flex flex-wrap gap-2 mb-4">
@@ -896,7 +1134,7 @@ function EmailsPageContent() {
               : "bg-gray-100 text-gray-700 hover:bg-gray-200"
           }`}
         >
-          📊 Gathering Data ({filterCounts.gatheringData})
+          📊 New ({filterCounts.gatheringData})
         </button>
       </div>
 
@@ -1274,10 +1512,9 @@ function EmailsPageContent() {
             <div className="flex items-center gap-2">
               <span className="text-2xl">✓</span>
               <span className="font-semibold text-blue-600">{selectedIds.size}</span>
-              <span className="text-gray-600">email{selectedIds.size !== 1 ? "s" : ""} selected</span>
+              <span className="text-gray-600">selected</span>
             </div>
-            
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -1285,13 +1522,12 @@ function EmailsPageContent() {
               >
                 📥 Export CSV
               </Button>
-              
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 onClick={clearSelection}
               >
-                ✕ Clear
+                Clear
               </Button>
             </div>
           </div>
@@ -1301,30 +1537,16 @@ function EmailsPageContent() {
   );
 }
 
-// Loading fallback for Suspense
-function EmailsPageLoading() {
-  return (
-    <div className="p-4 lg:p-8">
-      <div className="mb-6 lg:mb-8">
-        <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">📧 Email Accounts</h1>
-        <p className="text-gray-500 mt-1 text-sm lg:text-base">Loading sender emails...</p>
-      </div>
-      <Card>
-        <CardContent className="p-8">
-          <div className="flex items-center justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-            <span className="ml-3 text-gray-600">Fetching email accounts...</span>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-// Wrapper component with Suspense boundary for useSearchParams
 export default function EmailsPage() {
   return (
-    <Suspense fallback={<EmailsPageLoading />}>
+    <Suspense fallback={
+      <div className="p-4 lg:p-8">
+        <div className="mb-6 lg:mb-8">
+          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">📧 Accounts</h1>
+          <p className="text-gray-500 mt-1 text-sm lg:text-base">Loading...</p>
+        </div>
+      </div>
+    }>
       <EmailsPageContent />
     </Suspense>
   );
