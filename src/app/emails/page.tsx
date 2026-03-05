@@ -6,8 +6,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { getEmails, type EmailStatus, type WarmupStatus, type SenderEmail } from "@/lib/mock-data";
-import { exportToCSV, EMAIL_ACCOUNTS_COLUMNS } from "@/lib/export-csv";
+import { toast } from "sonner";
 
 interface BisonSenderEmail {
   id: number;
@@ -128,6 +129,11 @@ function EmailsPageContent() {
   const [loading, setLoading] = useState(true);
   const [apiEmails, setApiEmails] = useState<DisplayEmail[] | null>(null);
   const [usingMockData, setUsingMockData] = useState(false);
+  
+  // Bulk selection state
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkActionLoading, setBulkActionLoading] = useState<string | null>(null);
+  
   const pageSize = 25;
 
   // Update URL when filters change
@@ -262,7 +268,7 @@ function EmailsPageContent() {
   }, [statusFilter, warmupFilter]);
 
   // Filter and paginate emails
-  const { data: emails, total, totalPages, filteredData } = useMemo(() => {
+  const { data: emails, total, totalPages, filteredEmails: allFilteredEmails } = useMemo(() => {
     // Use mock data if API data not available
     if (apiEmails === null) {
       const result = getEmails({
@@ -274,17 +280,7 @@ function EmailsPageContent() {
         sortBy: "replyRate",
         sortOrder: "asc",
       });
-      // For mock data, get all filtered data for export
-      const allFiltered = getEmails({
-        page: 1,
-        pageSize: 10000,
-        search,
-        status: statusFilter,
-        warmupStatus: warmupFilter === "on" ? "ready" : warmupFilter === "off" ? "paused" : "all",
-        sortBy: "replyRate",
-        sortOrder: "asc",
-      });
-      return { ...result, filteredData: allFiltered.data };
+      return { ...result, filteredEmails: result.data };
     }
     
     // Filter API data locally
@@ -338,26 +334,165 @@ function EmailsPageContent() {
     const start = (page - 1) * pageSize;
     const data = filteredEmails.slice(start, start + pageSize);
     
-    return { data, total, page, pageSize, totalPages, filteredData: filteredEmails };
+    return { data, total, page, pageSize, totalPages, filteredEmails };
   }, [apiEmails, page, pageSize, search, statusFilter, warmupFilter, sortBy, sortOrder]);
 
-  // Export handler
-  const handleExportCSV = useCallback(() => {
-    // Prepare data for export - use filteredData (all filtered, not just current page)
-    const exportData = filteredData.map((email: DisplayEmail) => ({
-      email: email.email,
-      name: email.name,
-      domain: email.domain,
-      status: email.status,
-      warmupEnabled: email.warmupEnabled !== false && email.warmupStatus !== "paused" ? "ON" : "OFF",
-      dailyLimit: email.dailyLimit,
-      totalSent: email.totalSent || email.sentLast7Days,
-      totalReplies: email.totalReplies || email.repliesLast7Days,
-      replyRate: email.replyRate,
-    }));
+  // Selection handlers
+  const toggleSelectEmail = useCallback((id: number) => {
+    setSelectedIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const selectAllOnPage = useCallback(() => {
+    const currentPageIds = emails.map(e => e.id);
+    const allSelected = currentPageIds.every(id => selectedIds.has(id));
     
-    exportToCSV(exportData, "email-accounts", EMAIL_ACCOUNTS_COLUMNS);
-  }, [filteredData]);
+    if (allSelected) {
+      // Deselect all on current page
+      setSelectedIds(prev => {
+        const newSet = new Set(prev);
+        currentPageIds.forEach(id => newSet.delete(id));
+        return newSet;
+      });
+    } else {
+      // Select all on current page
+      setSelectedIds(prev => {
+        const newSet = new Set(prev);
+        currentPageIds.forEach(id => newSet.add(id));
+        return newSet;
+      });
+    }
+  }, [emails, selectedIds]);
+
+  const selectAllFiltered = useCallback(() => {
+    const allIds = allFilteredEmails.map(e => e.id);
+    setSelectedIds(new Set(allIds));
+  }, [allFilteredEmails]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  // Check selection state for current page
+  const currentPageIds = emails.map(e => e.id);
+  const allOnPageSelected = currentPageIds.length > 0 && currentPageIds.every(id => selectedIds.has(id));
+  const someOnPageSelected = currentPageIds.some(id => selectedIds.has(id));
+
+  // Bulk action handlers
+  const handleEnableWarmup = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    
+    setBulkActionLoading("enable");
+    try {
+      const response = await fetch("/api/bison?endpoint=sender-emails/warmup/enable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sender_email_ids: Array.from(selectedIds) }),
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.details || error.error || "Failed to enable warmup");
+      }
+      
+      toast.success(`Warmup enabled for ${selectedIds.size} email(s)`);
+      
+      // Update local state
+      setApiEmails(prev => {
+        if (!prev) return prev;
+        return prev.map(email => {
+          if (selectedIds.has(email.id)) {
+            return { ...email, warmupEnabled: true, warmupStatus: "warming" as WarmupStatus };
+          }
+          return email;
+        });
+      });
+      
+      clearSelection();
+    } catch (error) {
+      toast.error(`Failed to enable warmup: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setBulkActionLoading(null);
+    }
+  }, [selectedIds, clearSelection]);
+
+  const handleDisableWarmup = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    
+    setBulkActionLoading("disable");
+    try {
+      const response = await fetch("/api/bison?endpoint=sender-emails/warmup/disable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sender_email_ids: Array.from(selectedIds) }),
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.details || error.error || "Failed to disable warmup");
+      }
+      
+      toast.success(`Warmup disabled for ${selectedIds.size} email(s)`);
+      
+      // Update local state
+      setApiEmails(prev => {
+        if (!prev) return prev;
+        return prev.map(email => {
+          if (selectedIds.has(email.id)) {
+            return { ...email, warmupEnabled: false, warmupStatus: "paused" as WarmupStatus };
+          }
+          return email;
+        });
+      });
+      
+      clearSelection();
+    } catch (error) {
+      toast.error(`Failed to disable warmup: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setBulkActionLoading(null);
+    }
+  }, [selectedIds, clearSelection]);
+
+  const handleExportSelected = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    
+    const allEmails = apiEmails || getEmails({ page: 1, pageSize: 10000 }).data;
+    const selectedEmails = allEmails.filter(e => selectedIds.has(e.id)) as DisplayEmail[];
+    
+    // Generate CSV
+    const headers = ["Email", "Name", "Status", "Warmup", "Reply Rate", "Daily Limit", "Total Sent", "Total Replies"];
+    const rows = selectedEmails.map(e => [
+      e.email,
+      e.name,
+      e.status,
+      e.warmupEnabled !== false ? "ON" : "OFF",
+      `${e.replyRate}%`,
+      e.dailyLimit,
+      e.totalSent || e.sentLast7Days,
+      e.totalReplies || e.repliesLast7Days,
+    ]);
+    
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.map(cell => `"${cell}"`).join(","))
+    ].join("\n");
+    
+    // Download
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `email-accounts-${new Date().toISOString().split("T")[0]}.csv`;
+    link.click();
+    
+    toast.success(`Exported ${selectedIds.size} email(s) to CSV`);
+  }, [selectedIds, apiEmails]);
 
   const getStatusBadge = (status: EmailStatus) => {
     switch (status) {
@@ -414,24 +549,13 @@ function EmailsPageContent() {
   }
 
   return (
-    <div className="p-4 lg:p-8">
-      <div className="mb-6 lg:mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Email Accounts</h1>
-          <p className="text-gray-500 mt-1 text-sm lg:text-base">
-            Monitor warmup and reply rates for {summaryStats.total.toLocaleString()} sender emails
-            {usingMockData && <span className="text-orange-500 ml-2">(Demo Mode)</span>}
-          </p>
-        </div>
-        <Button 
-          onClick={handleExportCSV}
-          variant="outline"
-          size="sm"
-          disabled={total === 0}
-          className="shrink-0"
-        >
-          Export CSV
-        </Button>
+    <div className="p-4 lg:p-8 pb-24 lg:pb-8">
+      <div className="mb-6 lg:mb-8">
+        <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Email Accounts</h1>
+        <p className="text-gray-500 mt-1 text-sm lg:text-base">
+          Monitor warmup and reply rates for {summaryStats.total.toLocaleString()} sender emails
+          {usingMockData && <span className="text-orange-500 ml-2">(Demo Mode)</span>}
+        </p>
       </div>
 
       {/* Stats Summary Bar */}
@@ -601,61 +725,108 @@ function EmailsPageContent() {
         </CardContent>
       </Card>
 
+      {/* Selection Info Bar */}
+      {selectedIds.size > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+          <span className="font-medium text-blue-600">{selectedIds.size} selected</span>
+          {selectedIds.size < total && (
+            <button
+              onClick={selectAllFiltered}
+              className="text-blue-600 hover:text-blue-800 underline"
+            >
+              Select all {total} matching
+            </button>
+          )}
+          <button
+            onClick={clearSelection}
+            className="text-gray-500 hover:text-gray-700 underline"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
+
       {/* Mobile Card View */}
       <div className="lg:hidden space-y-3">
+        {/* Select All for Mobile */}
+        <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+          <Checkbox
+            checked={allOnPageSelected}
+            indeterminate={someOnPageSelected && !allOnPageSelected}
+            onChange={selectAllOnPage}
+          />
+          <span className="text-sm text-gray-600">
+            {allOnPageSelected ? "Deselect all on page" : "Select all on page"}
+          </span>
+        </div>
+        
         {(emails as DisplayEmail[]).map((email) => {
           const hasSends = (email.totalSent || email.sentLast7Days) > 0;
           const limitDisplay = getDailyLimitDisplay(email.dailyLimit);
+          const isSelected = selectedIds.has(email.id);
           return (
-            <Card key={email.id} className="cursor-pointer hover:bg-gray-50">
+            <Card 
+              key={email.id} 
+              className={`cursor-pointer transition-all ${isSelected ? "ring-2 ring-blue-500 bg-blue-50" : "hover:bg-gray-50"}`}
+            >
               <CardContent className="p-4">
-                <div className="flex justify-between items-start mb-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-sm truncate">{email.email}</div>
-                    <div className="text-xs text-gray-500">{email.name}</div>
-                  </div>
-                  <div className="flex flex-col gap-1 items-end ml-2">
-                    {getWarmupBadge(email)}
-                    {getStatusBadge(email.status)}
-                  </div>
-                </div>
-                
-                {/* Reply Rate Highlight */}
-                <div className="bg-gray-50 rounded-lg p-3 mb-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-gray-500">Reply Rate</span>
-                    <span className={`text-lg ${getReplyRateColor(email.replyRate, hasSends)}`}>
-                      {hasSends ? `${email.replyRate}%` : "—"}
-                    </span>
-                  </div>
-                  {hasSends && (
-                    <div className="w-full h-1.5 bg-gray-200 rounded-full mt-2">
-                      <div 
-                        className={`h-full rounded-full ${
-                          email.replyRate < 1 ? "bg-red-500" : 
-                          email.replyRate < 2 ? "bg-yellow-500" : "bg-green-500"
-                        }`}
-                        style={{ width: `${Math.min(email.replyRate * 25, 100)}%` }}
-                      />
+                <div className="flex items-start gap-3">
+                  <Checkbox
+                    checked={isSelected}
+                    onChange={() => toggleSelectEmail(email.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="mt-1"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-start mb-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-sm truncate">{email.email}</div>
+                        <div className="text-xs text-gray-500">{email.name}</div>
+                      </div>
+                      <div className="flex flex-col gap-1 items-end ml-2">
+                        {getWarmupBadge(email)}
+                        {getStatusBadge(email.status)}
+                      </div>
                     </div>
-                  )}
-                </div>
-                
-                <div className="grid grid-cols-3 gap-2 text-xs">
-                  <div>
-                    <div className="text-gray-500">Daily Limit</div>
-                    <div className={`font-medium ${limitDisplay.color}`}>
-                      {limitDisplay.text}
-                      <span className="text-xs text-gray-400 ml-1">{limitDisplay.stage}</span>
+                    
+                    {/* Reply Rate Highlight */}
+                    <div className="bg-gray-50 rounded-lg p-3 mb-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-gray-500">Reply Rate</span>
+                        <span className={`text-lg ${getReplyRateColor(email.replyRate, hasSends)}`}>
+                          {hasSends ? `${email.replyRate}%` : "—"}
+                        </span>
+                      </div>
+                      {hasSends && (
+                        <div className="w-full h-1.5 bg-gray-200 rounded-full mt-2">
+                          <div 
+                            className={`h-full rounded-full ${
+                              email.replyRate < 1 ? "bg-red-500" : 
+                              email.replyRate < 2 ? "bg-yellow-500" : "bg-green-500"
+                            }`}
+                            style={{ width: `${Math.min(email.replyRate * 25, 100)}%` }}
+                          />
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  <div>
-                    <div className="text-gray-500">Total Sent</div>
-                    <div className="font-medium">{(email.totalSent || email.sentLast7Days).toLocaleString()}</div>
-                  </div>
-                  <div>
-                    <div className="text-gray-500">Replies</div>
-                    <div className="font-medium">{(email.totalReplies || email.repliesLast7Days).toLocaleString()}</div>
+                    
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <div className="text-gray-500">Daily Limit</div>
+                        <div className={`font-medium ${limitDisplay.color}`}>
+                          {limitDisplay.text}
+                          <span className="text-xs text-gray-400 ml-1">{limitDisplay.stage}</span>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-gray-500">Total Sent</div>
+                        <div className="font-medium">{(email.totalSent || email.sentLast7Days).toLocaleString()}</div>
+                      </div>
+                      <div>
+                        <div className="text-gray-500">Replies</div>
+                        <div className="font-medium">{(email.totalReplies || email.repliesLast7Days).toLocaleString()}</div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -671,6 +842,14 @@ function EmailsPageContent() {
             <table className="w-full">
               <thead>
                 <tr className="border-b bg-gray-50">
+                  <th className="text-left p-4 w-12">
+                    <Checkbox
+                      checked={allOnPageSelected}
+                      indeterminate={someOnPageSelected && !allOnPageSelected}
+                      onChange={selectAllOnPage}
+                      title={allOnPageSelected ? "Deselect all" : "Select all"}
+                    />
+                  </th>
                   <th className="text-left p-4 font-medium text-sm text-gray-600">Email</th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">Warmup</th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">
@@ -723,8 +902,19 @@ function EmailsPageContent() {
                 {(emails as DisplayEmail[]).map((email) => {
                   const hasSends = (email.totalSent || email.sentLast7Days) > 0;
                   const limitDisplay = getDailyLimitDisplay(email.dailyLimit);
+                  const isSelected = selectedIds.has(email.id);
                   return (
-                    <tr key={email.id} className="border-b cursor-pointer hover:bg-gray-50">
+                    <tr 
+                      key={email.id} 
+                      className={`border-b cursor-pointer transition-all ${isSelected ? "bg-blue-50" : "hover:bg-gray-50"}`}
+                      onClick={() => toggleSelectEmail(email.id)}
+                    >
+                      <td className="p-4" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={isSelected}
+                          onChange={() => toggleSelectEmail(email.id)}
+                        />
+                      </td>
                       <td className="p-4">
                         <div>
                           <div className="font-medium">{email.email}</div>
@@ -814,6 +1004,71 @@ function EmailsPageContent() {
           </Button>
         </div>
       </div>
+
+      {/* Bulk Actions Bar - Fixed at bottom */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 lg:left-64 bg-white border-t shadow-lg z-50 p-3 lg:p-4 mb-16 lg:mb-0">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-blue-600">{selectedIds.size}</span>
+              <span className="text-gray-600">email{selectedIds.size !== 1 ? "s" : ""} selected</span>
+            </div>
+            
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleEnableWarmup}
+                disabled={bulkActionLoading !== null}
+                className="bg-green-600 hover:bg-green-700"
+              >
+                {bulkActionLoading === "enable" ? (
+                  <>
+                    <span className="animate-spin mr-2">⏳</span>
+                    Enabling...
+                  </>
+                ) : (
+                  "🔥 Enable Warmup"
+                )}
+              </Button>
+              
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDisableWarmup}
+                disabled={bulkActionLoading !== null}
+              >
+                {bulkActionLoading === "disable" ? (
+                  <>
+                    <span className="animate-spin mr-2">⏳</span>
+                    Disabling...
+                  </>
+                ) : (
+                  "⏸️ Disable Warmup"
+                )}
+              </Button>
+              
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleExportSelected}
+                disabled={bulkActionLoading !== null}
+              >
+                📥 Export CSV
+              </Button>
+              
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearSelection}
+                disabled={bulkActionLoading !== null}
+              >
+                ✕ Clear
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
