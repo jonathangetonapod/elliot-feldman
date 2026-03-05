@@ -37,9 +37,13 @@ function categorizeAccounts(warmupData: WarmupAccountComparison[]): {
   const healthy: SimpleAccount[] = [];
 
   for (const account of warmupData) {
-    const currentRate = account.current.warmup_reply_rate ?? 0;
+    // Defensive: ensure account has required structure
+    if (!account || !account.email) continue;
+    
+    // Safely access nested properties with fallbacks
+    const currentRate = account.current?.warmup_reply_rate ?? 0;
     const baselineRate = account.baseline?.warmup_reply_rate ?? currentRate;
-    const change = account.changes.warmup_reply_rate ?? 0;
+    const change = account.changes?.warmup_reply_rate ?? 0;
 
     const accountData: SimpleAccount = {
       id: account.id,
@@ -79,34 +83,34 @@ function categorizeAccounts(warmupData: WarmupAccountComparison[]): {
   return { needsAction, watch, healthy };
 }
 
-// Status config for colors
+// Status config for colors - BIGGER and more COLORFUL cards
 const STATUS_CONFIG = {
   action: {
     emoji: '🔥',
     label: 'Needs Action',
-    bgCard: 'bg-red-500',
+    bgCard: 'bg-red-100',
     bgLight: 'bg-red-50',
-    border: 'border-red-200',
-    text: 'text-red-700',
-    textDark: 'text-white',
+    border: 'border-red-300',
+    text: 'text-red-600',
+    textDark: 'text-red-600',
   },
   watch: {
     emoji: '⚠️',
     label: 'Watch',
-    bgCard: 'bg-amber-500',
+    bgCard: 'bg-amber-100',
     bgLight: 'bg-amber-50',
-    border: 'border-amber-200',
-    text: 'text-amber-700',
-    textDark: 'text-white',
+    border: 'border-amber-300',
+    text: 'text-amber-600',
+    textDark: 'text-amber-600',
   },
   healthy: {
     emoji: '✅',
     label: 'Healthy',
-    bgCard: 'bg-emerald-500',
-    bgLight: 'bg-emerald-50',
-    border: 'border-emerald-200',
-    text: 'text-emerald-700',
-    textDark: 'text-white',
+    bgCard: 'bg-green-100',
+    bgLight: 'bg-green-50',
+    border: 'border-green-300',
+    text: 'text-green-600',
+    textDark: 'text-green-600',
   },
 };
 
@@ -148,7 +152,7 @@ function AccountRow({ account }: { account: SimpleAccount }) {
   );
 }
 
-// Big Summary Card
+// Big Summary Card - BIGGER and more COLORFUL
 function SummaryCard({ 
   status, 
   count, 
@@ -166,10 +170,10 @@ function SummaryCard({
     <button
       onClick={onClick}
       className={`
-        relative w-full p-6 rounded-2xl transition-all duration-200
-        ${config.bgCard} ${config.textDark}
+        relative w-full p-8 lg:p-10 rounded-3xl transition-all duration-200
+        ${config.bgCard} ${config.textDark} border-2 ${config.border}
         ${isSelected ? 'ring-4 ring-offset-2 ring-gray-900 scale-[1.02]' : 'hover:scale-[1.02]'}
-        active:scale-[0.98] shadow-lg
+        active:scale-[0.98] shadow-xl
       `}
     >
       {/* Selection indicator */}
@@ -180,9 +184,9 @@ function SummaryCard({
       )}
       
       <div className="text-center">
-        <div className="text-4xl mb-2">{config.emoji}</div>
-        <div className="text-5xl lg:text-6xl font-black mb-2">{count}</div>
-        <div className="text-sm lg:text-base font-semibold opacity-90 uppercase tracking-wide">
+        <div className="text-5xl lg:text-6xl mb-3">{config.emoji}</div>
+        <div className="text-6xl lg:text-7xl font-black mb-3">{count}</div>
+        <div className="text-base lg:text-lg font-bold uppercase tracking-wide">
           {config.label}
         </div>
       </div>
@@ -190,7 +194,7 @@ function SummaryCard({
   );
 }
 
-// Filter Tab
+// Filter Tab - updated to match new card colors
 function FilterTab({ 
   status, 
   count, 
@@ -203,8 +207,14 @@ function FilterTab({
   onClick: () => void;
 }) {
   const config = status === 'all' 
-    ? { emoji: '📋', label: 'All', bgLight: 'bg-gray-100', text: 'text-gray-700', border: 'border-gray-300' }
+    ? { emoji: '📋', label: 'All', bgLight: 'bg-gray-100', text: 'text-gray-700', border: 'border-gray-300', bgCard: 'bg-gray-200' }
     : STATUS_CONFIG[status];
+  
+  // Get the right background color for selected state
+  const selectedBg = status === 'all' ? 'bg-gray-900 text-white' 
+    : status === 'action' ? 'bg-red-100 text-red-600 border border-red-300'
+    : status === 'watch' ? 'bg-amber-100 text-amber-600 border border-amber-300'
+    : 'bg-green-100 text-green-600 border border-green-300';
   
   return (
     <button
@@ -212,7 +222,7 @@ function FilterTab({
       className={`
         px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap
         ${isSelected 
-          ? `${status === 'all' ? 'bg-gray-900 text-white' : STATUS_CONFIG[status].bgCard + ' text-white'}` 
+          ? selectedBg
           : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
         }
       `}
@@ -244,8 +254,58 @@ export default function AccountsPage() {
           30: '30vs30',
         };
         const response = await fetchWarmupStats(periodMap[timePeriod], true);
-        if (response.data) {
-          setWarmupData(response.data);
+        
+        // Handle different response formats from the API
+        // The API returns { data: [...], meta: {...} }
+        // data could be WarmupAccountComparison[] when compare=true
+        // or raw WarmupSenderEmail[] when compare=false
+        let accounts: WarmupAccountComparison[] = [];
+        
+        if (response && response.data && Array.isArray(response.data)) {
+          // Check if this is comparison data (has 'current' property) or raw data
+          const firstItem = response.data[0];
+          if (firstItem && 'current' in firstItem) {
+            // This is comparison data - use directly
+            accounts = response.data;
+          } else if (firstItem && 'email' in firstItem) {
+            // This is raw sender email data - needs transformation
+            // Transform raw warmup sender emails to comparison format
+            accounts = response.data.map((email: any) => {
+              const sent = email.warmup_emails_sent ?? 0;
+              const replies = email.warmup_replies_received ?? 0;
+              const replyRate = sent > 0 ? (replies / sent) * 100 : 0;
+              
+              return {
+                id: email.id,
+                email: email.email,
+                name: email.name,
+                warmup_enabled: email.warmup_enabled,
+                daily_limit: email.daily_limit,
+                created_at: email.created_at,
+                current: {
+                  warmup_score: email.warmup_score ?? 0,
+                  warmup_emails_sent: sent,
+                  warmup_replies_received: replies,
+                  warmup_reply_rate: Math.round(replyRate * 100) / 100,
+                  warmup_emails_saved_from_spam: email.warmup_emails_saved_from_spam ?? 0,
+                  warmup_bounces_received_count: email.warmup_bounces_received_count ?? 0,
+                  warmup_bounces_caused_count: email.warmup_bounces_caused_count ?? 0,
+                },
+                baseline: null,
+                changes: {
+                  warmup_score: 0,
+                  warmup_reply_rate: 0,
+                  warmup_replies_received: 0,
+                  warmup_bounces_received_count: 0,
+                },
+                health: 'stable' as const,
+              };
+            });
+          }
+        }
+        
+        if (accounts.length > 0) {
+          setWarmupData(accounts);
           setLastUpdated(new Date());
         }
       } catch (err) {
@@ -257,7 +317,7 @@ export default function AccountsPage() {
     fetchWarmup();
   }, [timePeriod]);
 
-  // Handle refresh
+  // Handle refresh - transform data same as initial fetch
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
@@ -267,8 +327,51 @@ export default function AccountsPage() {
         30: '30vs30',
       };
       const response = await fetchWarmupStats(periodMap[timePeriod], true);
-      if (response.data) {
-        setWarmupData(response.data);
+      
+      // Handle different response formats from the API
+      let accounts: WarmupAccountComparison[] = [];
+      
+      if (response && response.data && Array.isArray(response.data)) {
+        const firstItem = response.data[0];
+        if (firstItem && 'current' in firstItem) {
+          accounts = response.data;
+        } else if (firstItem && 'email' in firstItem) {
+          accounts = response.data.map((email: any) => {
+            const sent = email.warmup_emails_sent ?? 0;
+            const replies = email.warmup_replies_received ?? 0;
+            const replyRate = sent > 0 ? (replies / sent) * 100 : 0;
+            
+            return {
+              id: email.id,
+              email: email.email,
+              name: email.name,
+              warmup_enabled: email.warmup_enabled,
+              daily_limit: email.daily_limit,
+              created_at: email.created_at,
+              current: {
+                warmup_score: email.warmup_score ?? 0,
+                warmup_emails_sent: sent,
+                warmup_replies_received: replies,
+                warmup_reply_rate: Math.round(replyRate * 100) / 100,
+                warmup_emails_saved_from_spam: email.warmup_emails_saved_from_spam ?? 0,
+                warmup_bounces_received_count: email.warmup_bounces_received_count ?? 0,
+                warmup_bounces_caused_count: email.warmup_bounces_caused_count ?? 0,
+              },
+              baseline: null,
+              changes: {
+                warmup_score: 0,
+                warmup_reply_rate: 0,
+                warmup_replies_received: 0,
+                warmup_bounces_received_count: 0,
+              },
+              health: 'stable' as const,
+            };
+          });
+        }
+      }
+      
+      if (accounts.length > 0) {
+        setWarmupData(accounts);
         setLastUpdated(new Date());
       }
       await refetch();
