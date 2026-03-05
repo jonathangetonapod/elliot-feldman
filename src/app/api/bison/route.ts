@@ -10,12 +10,14 @@ import { NextRequest, NextResponse } from 'next/server';
 const BISON_BASE_URL = 'https://send.leadgenjay.com/api';
 
 export async function GET(request: NextRequest) {
-  const apiKey = process.env.BISON_API_KEY;
+  // Check for API key from header first (client-provided), then fall back to env var
+  const headerApiKey = request.headers.get('X-Bison-Api-Key');
+  const apiKey = headerApiKey || process.env.BISON_API_KEY;
   
   if (!apiKey) {
     return NextResponse.json(
-      { error: 'BISON_API_KEY environment variable not set' },
-      { status: 500 }
+      { error: 'No API key provided. Set BISON_API_KEY env var or pass X-Bison-Api-Key header' },
+      { status: 401 }
     );
   }
 
