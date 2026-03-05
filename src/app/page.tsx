@@ -267,6 +267,231 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
+          {/* Account Health Section */}
+          <div className="mb-6 lg:mb-8">
+            <h2 className="text-lg lg:text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <span>🏥</span>
+              Account Health
+            </h2>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
+              {/* Reply Rate Distribution Card */}
+              {(() => {
+                const criticalAccounts = emails.filter(e => e.replyRate < 1);
+                const warningAccounts = emails.filter(e => e.replyRate >= 1 && e.replyRate <= 2);
+                const healthyAccounts = emails.filter(e => e.replyRate > 2);
+                const total = emails.length || 1;
+                
+                return (
+                  <Card>
+                    <CardHeader className="pb-2 px-4 lg:px-6">
+                      <CardTitle className="text-sm lg:text-base flex items-center gap-2">
+                        📊 Reply Rate Distribution
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="px-4 lg:px-6 pb-4">
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">🔴</span>
+                            <span className="text-sm text-gray-600">Critical (&lt;1%)</span>
+                          </div>
+                          <span className="font-bold text-red-600">{criticalAccounts.length}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">🟡</span>
+                            <span className="text-sm text-gray-600">Warning (1-2%)</span>
+                          </div>
+                          <span className="font-bold text-yellow-600">{warningAccounts.length}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">🟢</span>
+                            <span className="text-sm text-gray-600">Healthy (&gt;2%)</span>
+                          </div>
+                          <span className="font-bold text-green-600">{healthyAccounts.length}</span>
+                        </div>
+                        
+                        {/* Distribution Bar */}
+                        <div className="mt-4">
+                          <div className="h-4 rounded-full overflow-hidden flex bg-gray-200">
+                            {criticalAccounts.length > 0 && (
+                              <div 
+                                className="bg-red-500 transition-all" 
+                                style={{ width: `${(criticalAccounts.length / total) * 100}%` }}
+                              />
+                            )}
+                            {warningAccounts.length > 0 && (
+                              <div 
+                                className="bg-yellow-500 transition-all" 
+                                style={{ width: `${(warningAccounts.length / total) * 100}%` }}
+                              />
+                            )}
+                            {healthyAccounts.length > 0 && (
+                              <div 
+                                className="bg-green-500 transition-all" 
+                                style={{ width: `${(healthyAccounts.length / total) * 100}%` }}
+                              />
+                            )}
+                          </div>
+                          <div className="flex justify-between mt-2 text-xs text-gray-500">
+                            <span>{((criticalAccounts.length / total) * 100).toFixed(0)}% critical</span>
+                            <span>{((healthyAccounts.length / total) * 100).toFixed(0)}% healthy</span>
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
+
+              {/* Warmup Status Card */}
+              {(() => {
+                const warmupOn = emails.filter(e => e.warmupStatus === 'warming');
+                const warmupOff = emails.filter(e => e.warmupStatus !== 'warming');
+                
+                // Daily limit tiers
+                const earlyWarmup = emails.filter(e => e.dailyLimit >= 5 && e.dailyLimit <= 10);
+                const midWarmup = emails.filter(e => e.dailyLimit >= 11 && e.dailyLimit <= 20);
+                const lateWarmup = emails.filter(e => e.dailyLimit >= 21 && e.dailyLimit <= 35);
+                const fullyWarmed = emails.filter(e => e.dailyLimit >= 36 && e.dailyLimit <= 50);
+                
+                const total = emails.length || 1;
+                const fullyWarmedPercent = (fullyWarmed.length / total) * 100;
+                
+                return (
+                  <Card>
+                    <CardHeader className="pb-2 px-4 lg:px-6">
+                      <CardTitle className="text-sm lg:text-base flex items-center gap-2">
+                        🔥 Warmup Status
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="px-4 lg:px-6 pb-4">
+                      <div className="space-y-3">
+                        {/* On/Off Status */}
+                        <div className="flex items-center justify-between pb-2 border-b">
+                          <div className="flex items-center gap-3">
+                            <div className="text-center">
+                              <div className="text-lg font-bold text-orange-600">{warmupOn.length}</div>
+                              <div className="text-xs text-gray-500">ON</div>
+                            </div>
+                            <div className="text-gray-300">|</div>
+                            <div className="text-center">
+                              <div className="text-lg font-bold text-gray-400">{warmupOff.length}</div>
+                              <div className="text-xs text-gray-500">OFF</div>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Daily Limit Tiers */}
+                        <div className="space-y-1.5 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">5-10/day (early)</span>
+                            <span className="font-medium">{earlyWarmup.length}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">11-20/day (mid)</span>
+                            <span className="font-medium">{midWarmup.length}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">21-35/day (late)</span>
+                            <span className="font-medium">{lateWarmup.length}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">36-50/day (fully warmed)</span>
+                            <span className="font-bold text-green-600">{fullyWarmed.length}</span>
+                          </div>
+                        </div>
+                        
+                        {/* Progress Bar */}
+                        <div className="mt-3">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs text-gray-500">Fully warmed</span>
+                            <span className="text-xs font-bold text-green-600">{fullyWarmedPercent.toFixed(0)}%</span>
+                          </div>
+                          <ProgressBar 
+                            value={fullyWarmed.length} 
+                            max={total} 
+                            color={fullyWarmedPercent >= 70 ? "bg-green-500" : fullyWarmedPercent >= 40 ? "bg-yellow-500" : "bg-orange-500"}
+                          />
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
+
+              {/* Top/Bottom Performers Card */}
+              {(() => {
+                const sortedByReplyRate = [...emails]
+                  .filter(e => e.sentLast7Days > 0)
+                  .sort((a, b) => b.replyRate - a.replyRate);
+                
+                const topPerformers = sortedByReplyRate.slice(0, 3);
+                const bottomPerformers = sortedByReplyRate.slice(-3).reverse();
+                
+                return (
+                  <Card>
+                    <CardHeader className="pb-2 px-4 lg:px-6">
+                      <CardTitle className="text-sm lg:text-base flex items-center gap-2">
+                        🏆 Top & Bottom Performers
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="px-4 lg:px-6 pb-4">
+                      <div className="space-y-4">
+                        {/* Top Performers */}
+                        <div>
+                          <div className="text-xs font-medium text-green-700 mb-2">🌟 Best Performing</div>
+                          <div className="space-y-1.5">
+                            {topPerformers.length > 0 ? topPerformers.map((email, idx) => (
+                              <div key={email.id} className="flex items-center justify-between text-xs bg-green-50 rounded px-2 py-1.5">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="text-green-600 font-bold">{idx + 1}</span>
+                                  <span className="truncate text-gray-700" title={email.email}>
+                                    {email.email.length > 20 ? email.email.slice(0, 20) + '...' : email.email}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className="font-bold text-green-700">{email.replyRate}%</span>
+                                  <span className="text-gray-400">({email.sentLast7Days})</span>
+                                </div>
+                              </div>
+                            )) : (
+                              <div className="text-xs text-gray-400 text-center py-2">No data</div>
+                            )}
+                          </div>
+                        </div>
+                        
+                        {/* Bottom Performers */}
+                        <div>
+                          <div className="text-xs font-medium text-red-700 mb-2">⚠️ Need Attention</div>
+                          <div className="space-y-1.5">
+                            {bottomPerformers.length > 0 ? bottomPerformers.map((email, idx) => (
+                              <div key={email.id} className="flex items-center justify-between text-xs bg-red-50 rounded px-2 py-1.5">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="text-red-600 font-bold">{idx + 1}</span>
+                                  <span className="truncate text-gray-700" title={email.email}>
+                                    {email.email.length > 20 ? email.email.slice(0, 20) + '...' : email.email}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className="font-bold text-red-700">{email.replyRate}%</span>
+                                  <span className="text-gray-400">({email.sentLast7Days})</span>
+                                </div>
+                              </div>
+                            )) : (
+                              <div className="text-xs text-gray-400 text-center py-2">No data</div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
+            </div>
+          </div>
+
           {/* Original Stats Grid */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 mb-6 lg:mb-8">
             <Card>
