@@ -392,3 +392,166 @@ export async function getRecentStats(days: number = 30): Promise<WorkspaceStats>
     formatDateForApi(endDate)
   );
 }
+
+// ==========================================
+// WARMUP STATS WITH DATE RANGE COMPARISON
+// ==========================================
+
+export interface WarmupPeriodStats {
+  warmup_score: number;
+  warmup_emails_sent: number;
+  warmup_replies_received: number;
+  warmup_emails_saved_from_spam: number;
+  warmup_bounces_received_count: number;
+  warmup_bounces_caused_count: number;
+}
+
+export interface WarmupAccountComparison {
+  id: number;
+  email: string;
+  name?: string;
+  warmup_enabled?: boolean;
+  daily_limit?: number;
+  created_at?: string;
+  current: WarmupPeriodStats;
+  baseline: WarmupPeriodStats | null;
+  changes: {
+    warmup_score: number;
+    warmup_replies_received: number;
+    warmup_bounces_received_count: number;
+  };
+  health: 'declining' | 'warning' | 'stable' | 'improving' | 'new';
+}
+
+export interface WarmupStatsResponse {
+  data: WarmupAccountComparison[];
+  meta: {
+    total: number;
+    periods: {
+      current: { start: string; end: string };
+      baseline: { start: string; end: string } | null;
+    };
+    periodType: string;
+    compareMode: boolean;
+  };
+}
+
+export type WarmupPeriodType = '7vs14' | '14vs14' | '30vs30';
+
+/**
+ * Fetch warmup stats with date range comparison
+ * @param periodType - Comparison period type: '7vs14' (default), '14vs14', or '30vs30'
+ * @param compare - Whether to fetch baseline period for comparison
+ */
+export async function fetchWarmupStats(
+  periodType: WarmupPeriodType = '7vs14',
+  compare: boolean = true
+): Promise<WarmupStatsResponse> {
+  const params = new URLSearchParams({
+    period: periodType,
+    compare: compare.toString(),
+  });
+
+  const response = await fetch(`/api/bison/warmup?${params}`);
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch warmup stats: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Fetch warmup stats for a custom date range (no comparison)
+ */
+export async function fetchWarmupStatsForRange(
+  startDate: string,
+  endDate: string
+): Promise<WarmupStatsResponse> {
+  const params = new URLSearchParams({
+    start_date: startDate,
+    end_date: endDate,
+  });
+
+  const response = await fetch(`/api/bison/warmup?${params}`);
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch warmup stats: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get warmup health summary statistics
+ */
+export function getWarmupHealthSummary(accounts: WarmupAccountComparison[]): {
+  total: number;
+  declining: number;
+  warning: number;
+  stable: number;
+  improving: number;
+  new: number;
+  avgScoreChange: number;
+  avgScore: number;
+  bouncesIncreasing: number;
+} {
+  const summary = {
+    total: accounts.length,
+    declining: 0,
+    warning: 0,
+    stable: 0,
+    improving: 0,
+    new: 0,
+    avgScoreChange: 0,
+    avgScore: 0,
+    bouncesIncreasing: 0,
+  };
+
+  let totalScoreChange = 0;
+  let totalScore = 0;
+  let accountsWithBaseline = 0;
+
+  for (const account of accounts) {
+    // Count by health status
+    switch (account.health) {
+      case 'declining': summary.declining++; break;
+      case 'warning': summary.warning++; break;
+      case 'stable': summary.stable++; break;
+      case 'improving': summary.improving++; break;
+      case 'new': summary.new++; break;
+    }
+
+    // Track bounces increasing
+    if (account.changes.warmup_bounces_received_count > 0) {
+      summary.bouncesIncreasing++;
+    }
+
+    // Calculate averages
+    totalScore += account.current.warmup_score;
+    if (account.baseline) {
+      totalScoreChange += account.changes.warmup_score;
+      accountsWithBaseline++;
+    }
+  }
+
+  summary.avgScore = accounts.length > 0 
+    ? Math.round(totalScore / accounts.length) 
+    : 0;
+  summary.avgScoreChange = accountsWithBaseline > 0 
+    ? Math.round(totalScoreChange / accountsWithBaseline * 10) / 10 
+    : 0;
+
+  return summary;
+}
+
+/**
+ * Get period label for display
+ */
+export function getPeriodLabel(periodType: WarmupPeriodType): string {
+  switch (periodType) {
+    case '7vs14': return 'Last 7 days vs previous 14 days';
+    case '14vs14': return 'Last 14 days vs previous 14 days';
+    case '30vs30': return 'Last 30 days vs previous 30 days';
+  }
+}

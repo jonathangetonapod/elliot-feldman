@@ -10,6 +10,13 @@ import { Badge } from "@/components/ui/badge";
 import { getEmails, type WarmupStatus, type SenderEmail } from "@/lib/mock-data";
 import { toast } from "sonner";
 import {
+  fetchWarmupStats,
+  getWarmupHealthSummary,
+  getPeriodLabel,
+  type WarmupAccountComparison,
+  type WarmupPeriodType,
+} from "@/lib/bison-api";
+import {
   PieChart,
   Pie,
   Cell,
@@ -42,6 +49,7 @@ import {
   generateMockTrendData,
   generateMockAccountTrend,
 } from "@/components/trend-charts";
+import { AccountDetailModal, type AccountDetailData } from "@/components/account-detail-modal";
 
 interface BisonSenderEmail {
   id: number;
@@ -311,6 +319,129 @@ function WarmupStageIndicator({ dailyLimit, warmupEnabled }: { dailyLimit: numbe
   );
 }
 
+// Warmup Score Bar Component
+function WarmupScoreBar({ score, baseline, change }: { score: number; baseline?: number; change?: number }) {
+  // Score is 0-100
+  const getScoreColor = (s: number) => {
+    if (s >= 80) return 'bg-green-500';
+    if (s >= 60) return 'bg-yellow-500';
+    if (s >= 40) return 'bg-orange-500';
+    return 'bg-red-500';
+  };
+
+  const getChangeIcon = () => {
+    if (!change || Math.abs(change) < 5) return { icon: '→', color: 'text-gray-500' };
+    if (change > 0) return { icon: '↑', color: 'text-green-600' };
+    return { icon: '↓', color: 'text-red-600' };
+  };
+
+  const { icon, color } = getChangeIcon();
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <div className="w-16 h-2 bg-gray-200 rounded-full overflow-hidden">
+          <div
+            className={`h-full ${getScoreColor(score)} rounded-full transition-all duration-300`}
+            style={{ width: `${score}%` }}
+          />
+        </div>
+        <span className="text-sm font-medium">{score}</span>
+        {change !== undefined && Math.abs(change) >= 1 && (
+          <span className={`text-xs ${color}`}>
+            {icon}{Math.abs(Math.round(change))}%
+          </span>
+        )}
+      </div>
+      {baseline !== undefined && (
+        <div className="text-xs text-gray-400">
+          was {baseline}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Warmup Stats Card for Account
+function WarmupStatsCard({ warmup }: { warmup: WarmupAccountComparison | undefined }) {
+  if (!warmup) {
+    return (
+      <div className="bg-gray-50 rounded-lg p-3 border text-center">
+        <span className="text-xs text-gray-400">No warmup data</span>
+      </div>
+    );
+  }
+
+  const { current, baseline, changes, health } = warmup;
+
+  const getHealthBadge = () => {
+    switch (health) {
+      case 'declining': return { emoji: '🔴', label: 'Declining', bg: 'bg-red-100', text: 'text-red-700' };
+      case 'warning': return { emoji: '🟡', label: 'Warning', bg: 'bg-yellow-100', text: 'text-yellow-700' };
+      case 'stable': return { emoji: '🟢', label: 'Stable', bg: 'bg-green-100', text: 'text-green-700' };
+      case 'improving': return { emoji: '📈', label: 'Improving', bg: 'bg-blue-100', text: 'text-blue-700' };
+      case 'new': return { emoji: '🆕', label: 'New', bg: 'bg-gray-100', text: 'text-gray-700' };
+    }
+  };
+
+  const healthBadge = getHealthBadge();
+
+  return (
+    <div className="bg-white rounded-lg p-3 border space-y-3">
+      {/* Health Badge */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-gray-500">🔥 Warmup Health</span>
+        <span className={`text-xs px-2 py-0.5 rounded-full ${healthBadge.bg} ${healthBadge.text}`}>
+          {healthBadge.emoji} {healthBadge.label}
+        </span>
+      </div>
+
+      {/* Warmup Score */}
+      <div>
+        <div className="text-xs text-gray-500 mb-1">Score</div>
+        <WarmupScoreBar 
+          score={current.warmup_score} 
+          baseline={baseline?.warmup_score}
+          change={changes.warmup_score}
+        />
+      </div>
+
+      {/* Stats Grid */}
+      <div className="grid grid-cols-3 gap-2 text-xs">
+        <div className="text-center">
+          <div className="text-gray-500">📤 Sent</div>
+          <div className="font-medium">{current.warmup_emails_sent}</div>
+        </div>
+        <div className="text-center">
+          <div className="text-gray-500">💬 Replies</div>
+          <div className="font-medium">{current.warmup_replies_received}</div>
+          {changes.warmup_replies_received !== 0 && (
+            <div className={`text-xs ${changes.warmup_replies_received > 0 ? 'text-green-600' : 'text-red-600'}`}>
+              {changes.warmup_replies_received > 0 ? '↑' : '↓'}{Math.abs(Math.round(changes.warmup_replies_received))}%
+            </div>
+          )}
+        </div>
+        <div className="text-center">
+          <div className="text-gray-500">🚫 Bounces</div>
+          <div className={`font-medium ${current.warmup_bounces_received_count > 0 ? 'text-red-600' : ''}`}>
+            {current.warmup_bounces_received_count}
+          </div>
+          {changes.warmup_bounces_received_count > 0 && (
+            <div className="text-xs text-red-600">+{changes.warmup_bounces_received_count}</div>
+          )}
+        </div>
+      </div>
+
+      {/* Spam saved */}
+      {current.warmup_emails_saved_from_spam > 0 && (
+        <div className="text-xs text-green-600 text-center">
+          ✅ {current.warmup_emails_saved_from_spam} saved from spam
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Mini Pie Chart for Account Health - Updated for trend-based health
 function MiniHealthPie({ stats }: { stats: { declining: number; warning: number; stable: number; improving: number; gatheringData: number } }) {
   const data = [
@@ -434,6 +565,16 @@ function EmailsPageContent() {
   // Charts visibility toggle
   const [showCharts, setShowCharts] = useState(true);
   const [expandedAccountId, setExpandedAccountId] = useState<number | null>(null);
+  
+  // Account detail modal state
+  const [selectedAccountForDetail, setSelectedAccountForDetail] = useState<AccountDetailData | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+
+  // Warmup stats state
+  const [warmupStatsMap, setWarmupStatsMap] = useState<Map<string, WarmupAccountComparison>>(new Map());
+  const [warmupPeriod, setWarmupPeriod] = useState<WarmupPeriodType>('7vs14');
+  const [warmupLoading, setWarmupLoading] = useState(false);
+  const [warmupSummary, setWarmupSummary] = useState<ReturnType<typeof getWarmupHealthSummary> | null>(null);
 
   const pageSize = 25;
 
@@ -503,6 +644,36 @@ function EmailsPageContent() {
 
     fetchEmails();
   }, []);
+
+  // Fetch warmup stats with date range comparison
+  useEffect(() => {
+    async function fetchWarmup() {
+      setWarmupLoading(true);
+      try {
+        const response = await fetchWarmupStats(warmupPeriod, true);
+        
+        if (response.data) {
+          // Create map for quick lookup by email
+          const statsMap = new Map<string, WarmupAccountComparison>();
+          for (const account of response.data) {
+            statsMap.set(account.email.toLowerCase(), account);
+          }
+          setWarmupStatsMap(statsMap);
+          
+          // Calculate summary
+          const summary = getWarmupHealthSummary(response.data);
+          setWarmupSummary(summary);
+        }
+      } catch (error) {
+        console.error('Failed to fetch warmup stats:', error);
+        // Non-blocking - warmup stats are supplementary
+      } finally {
+        setWarmupLoading(false);
+      }
+    }
+    
+    fetchWarmup();
+  }, [warmupPeriod]);
 
   // Take snapshot for history tracking when emails load
   useEffect(() => {
@@ -822,6 +993,40 @@ function EmailsPageContent() {
   const allOnPageSelected = currentPageIds.length > 0 && currentPageIds.every(id => selectedIds.has(id));
   const someOnPageSelected = currentPageIds.some(id => selectedIds.has(id));
 
+  // Open account detail modal
+  const openAccountDetail = useCallback((email: DisplayEmail) => {
+    const trendAnalysis = trendAnalysisMap.get(email.id) || null;
+    
+    const accountData: AccountDetailData = {
+      id: email.id,
+      email: email.email,
+      name: email.name,
+      domain: email.domain,
+      status: email.status,
+      warmupEnabled: email.warmupEnabled !== false && email.warmupStatus !== "paused",
+      warmupStatus: email.warmupStatus,
+      warmupDay: email.warmupDay || 0,
+      dailyLimit: email.dailyLimit,
+      currentVolume: email.currentVolume,
+      replyRate: email.replyRate,
+      totalSent: email.totalSent || email.sentLast7Days,
+      totalReplies: email.totalReplies || email.repliesLast7Days,
+      sentLast7Days: email.sentLast7Days,
+      repliesLast7Days: email.repliesLast7Days,
+      createdAt: email.createdAt || new Date().toISOString(),
+      lastSyncedAt: email.lastSyncedAt,
+      trendAnalysis: trendAnalysis,
+    };
+    
+    setSelectedAccountForDetail(accountData);
+    setIsDetailModalOpen(true);
+  }, [trendAnalysisMap]);
+
+  const closeAccountDetail = useCallback(() => {
+    setIsDetailModalOpen(false);
+    setSelectedAccountForDetail(null);
+  }, []);
+
   const handleExportSelected = useCallback(() => {
     if (selectedIds.size === 0) return;
 
@@ -829,9 +1034,10 @@ function EmailsPageContent() {
     const selectedEmails = allEmails.filter(e => selectedIds.has(e.id)) as DisplayEmail[];
 
     // Generate CSV
-    const headers = ["Email", "Name", "Health", "Warmup", "Reply Rate", "Baseline Avg", "Current Avg", "% Change", "Daily Limit", "Total Sent", "Total Replies"];
+    const headers = ["Email", "Name", "Health", "Warmup", "Reply Rate", "Baseline Avg", "Current Avg", "% Change", "Daily Limit", "Total Sent", "Total Replies", "Warmup Score", "WU Score Change", "WU Bounces", "WU Replies"];
     const rows = selectedEmails.map(e => {
       const analysis = trendAnalysisMap.get(e.id);
+      const warmup = warmupStatsMap.get(e.email.toLowerCase());
       const health = analysis ? getHealthLabel(analysis.health).label : "No Data";
       return [
         e.email,
@@ -845,6 +1051,10 @@ function EmailsPageContent() {
         e.dailyLimit,
         e.totalSent || e.sentLast7Days,
         e.totalReplies || e.repliesLast7Days,
+        warmup ? warmup.current.warmup_score : "-",
+        warmup ? `${warmup.changes.warmup_score}%` : "-",
+        warmup ? warmup.current.warmup_bounces_received_count : "-",
+        warmup ? warmup.current.warmup_replies_received : "-",
       ];
     });
 
@@ -861,7 +1071,7 @@ function EmailsPageContent() {
     link.click();
 
     toast.success(`Exported ${selectedIds.size} email(s) to CSV`);
-  }, [selectedIds, apiEmails, trendAnalysisMap]);
+  }, [selectedIds, apiEmails, trendAnalysisMap, warmupStatsMap]);
 
   if (loading) {
     return (
@@ -998,6 +1208,70 @@ function EmailsPageContent() {
         </Card>
       </div>
 
+      {/* Warmup Stats Summary Row */}
+      {warmupSummary && (
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-6">
+          <Card className="col-span-2 lg:col-span-1 bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-2xl">🔥</span>
+                <span className="text-xs text-purple-600 uppercase tracking-wide font-medium">Avg Score</span>
+              </div>
+              <div className="text-2xl font-bold text-purple-600">{warmupSummary.avgScore}</div>
+              <div className={`text-xs ${warmupSummary.avgScoreChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {warmupSummary.avgScoreChange >= 0 ? '↑' : '↓'} {Math.abs(warmupSummary.avgScoreChange)}% from baseline
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className={`col-span-1 ${warmupSummary.declining > 0 ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-200' : 'bg-gradient-to-br from-green-50 to-green-100 border-green-200'}`}>
+            <CardContent className="p-4">
+              <div className="text-xs text-gray-500 mb-1">🔴 Score Declining</div>
+              <div className={`text-xl font-bold ${warmupSummary.declining > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {warmupSummary.declining}
+              </div>
+              <div className="text-xs text-gray-400">&gt;20% drop</div>
+            </CardContent>
+          </Card>
+
+          <Card className={`col-span-1 ${warmupSummary.warning > 0 ? 'bg-gradient-to-br from-yellow-50 to-yellow-100 border-yellow-200' : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-200'}`}>
+            <CardContent className="p-4">
+              <div className="text-xs text-gray-500 mb-1">🟡 Warning</div>
+              <div className={`text-xl font-bold ${warmupSummary.warning > 0 ? 'text-yellow-600' : 'text-gray-600'}`}>
+                {warmupSummary.warning}
+              </div>
+              <div className="text-xs text-gray-400">10-20% drop</div>
+            </CardContent>
+          </Card>
+
+          <Card className="col-span-1 bg-gradient-to-br from-green-50 to-green-100 border-green-200">
+            <CardContent className="p-4">
+              <div className="text-xs text-gray-500 mb-1">🟢 Stable</div>
+              <div className="text-xl font-bold text-green-600">{warmupSummary.stable}</div>
+              <div className="text-xs text-gray-400">Within ±10%</div>
+            </CardContent>
+          </Card>
+
+          <Card className="col-span-1 bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200">
+            <CardContent className="p-4">
+              <div className="text-xs text-gray-500 mb-1">📈 Improving</div>
+              <div className="text-xl font-bold text-blue-600">{warmupSummary.improving}</div>
+              <div className="text-xs text-gray-400">&gt;20% up</div>
+            </CardContent>
+          </Card>
+
+          <Card className={`col-span-1 ${warmupSummary.bouncesIncreasing > 0 ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-200' : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-200'}`}>
+            <CardContent className="p-4">
+              <div className="text-xs text-gray-500 mb-1">🚫 Bounces ↑</div>
+              <div className={`text-xl font-bold ${warmupSummary.bouncesIncreasing > 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                {warmupSummary.bouncesIncreasing}
+              </div>
+              <div className="text-xs text-gray-400">accounts</div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* Charts Section - Collapsible */}
       <div className="mb-6">
         <button
@@ -1127,6 +1401,40 @@ function EmailsPageContent() {
           )}
         </div>
       )}
+
+      {/* Time Period Selector */}
+      <Card className="mb-4">
+        <CardContent className="pt-4 px-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600">📅 Comparison Period:</span>
+              <select
+                className="px-3 py-1.5 border rounded-md text-sm bg-white"
+                value={warmupPeriod}
+                onChange={(e) => setWarmupPeriod(e.target.value as WarmupPeriodType)}
+              >
+                <option value="7vs14">Last 7 days vs previous 14 days</option>
+                <option value="14vs14">Last 14 days vs previous 14 days</option>
+                <option value="30vs30">Last 30 days vs previous 30 days</option>
+              </select>
+              {warmupLoading && (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
+              )}
+            </div>
+            {warmupSummary && (
+              <div className="flex items-center gap-4 text-xs text-gray-500">
+                <span>Avg Score: <strong className="text-gray-900">{warmupSummary.avgScore}</strong></span>
+                <span className={warmupSummary.avgScoreChange >= 0 ? 'text-green-600' : 'text-red-600'}>
+                  {warmupSummary.avgScoreChange >= 0 ? '↑' : '↓'} {Math.abs(warmupSummary.avgScoreChange)}%
+                </span>
+                {warmupSummary.bouncesIncreasing > 0 && (
+                  <span className="text-red-600">⚠️ {warmupSummary.bouncesIncreasing} with ↑ bounces</span>
+                )}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Quick Filter Buttons - Trend-based */}
       <div className="flex flex-wrap gap-2 mb-4">
@@ -1305,6 +1613,7 @@ function EmailsPageContent() {
                 trendAnalysis?.health === "warning" ? "border-yellow-200 bg-yellow-50" :
                 "hover:bg-gray-50"
               }`}
+              onClick={() => openAccountDetail(email)}
             >
               <CardContent className="p-4">
                 <div className="flex items-start gap-3">
@@ -1323,6 +1632,8 @@ function EmailsPageContent() {
                         </div>
                         <div className="text-xs text-gray-500">{email.name}</div>
                       </div>
+                      {/* View detail indicator */}
+                      <span className="text-gray-400 text-lg ml-2">›</span>
                     </div>
 
                     {/* Health Status - NEW */}
@@ -1371,8 +1682,11 @@ function EmailsPageContent() {
                       {expandedAccountId === email.id ? '📊 Hide Trend' : '📈 View Full Trend'}
                     </Button>
 
+                    {/* Warmup Stats (from API) */}
+                    <WarmupStatsCard warmup={warmupStatsMap.get(email.email.toLowerCase())} />
+
                     {/* Warmup Stage */}
-                    <div className="bg-white rounded-lg p-3 border mb-3">
+                    <div className="bg-white rounded-lg p-3 border mb-3 mt-3">
                       <div className="text-xs text-gray-500 mb-2">🔥 Warmup Stage</div>
                       <WarmupStageIndicator dailyLimit={email.dailyLimit} warmupEnabled={warmupEnabled} />
                     </div>
@@ -1445,7 +1759,8 @@ function EmailsPageContent() {
                       {sortBy === "dailyLimit" && (sortOrder === "asc" ? " ↑" : " ↓")}
                     </button>
                   </th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">📅 Days Active</th>
+                  <th className="text-center p-4 font-medium text-sm text-gray-600">🔥 WU Score</th>
+                  <th className="text-center p-4 font-medium text-sm text-gray-600">🚫 Bounces</th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">📈 Sparkline</th>
                   <th className="text-right p-4 font-medium text-sm text-gray-600">
                     <button
@@ -1481,7 +1796,7 @@ function EmailsPageContent() {
                         trendAnalysis?.health === "warning" ? "bg-yellow-50 hover:bg-yellow-100" :
                         "hover:bg-gray-50"
                       }`}
-                      onClick={() => toggleSelectEmail(email.id)}
+                      onClick={() => openAccountDetail(email)}
                     >
                       <td className="p-4" onClick={(e) => e.stopPropagation()}>
                         <Checkbox
@@ -1511,8 +1826,39 @@ function EmailsPageContent() {
                           <WarmupStageIndicator dailyLimit={email.dailyLimit} warmupEnabled={warmupEnabled} />
                         </div>
                       </td>
-                      <td className="p-4 text-center text-gray-600">
-                        <span className="text-sm">{email.daysActive ?? getDaysActive(email.createdAt)}d</span>
+                      <td className="p-4 text-center">
+                        {(() => {
+                          const warmup = warmupStatsMap.get(email.email.toLowerCase());
+                          if (!warmup) return <span className="text-xs text-gray-400">-</span>;
+                          const changeIcon = warmup.changes.warmup_score > 5 ? '↑' : warmup.changes.warmup_score < -5 ? '↓' : '';
+                          const changeColor = warmup.changes.warmup_score > 5 ? 'text-green-600' : warmup.changes.warmup_score < -5 ? 'text-red-600' : '';
+                          return (
+                            <div className="flex flex-col items-center">
+                              <span className="font-medium">{warmup.current.warmup_score}</span>
+                              {changeIcon && (
+                                <span className={`text-xs ${changeColor}`}>
+                                  {changeIcon}{Math.abs(Math.round(warmup.changes.warmup_score))}%
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="p-4 text-center">
+                        {(() => {
+                          const warmup = warmupStatsMap.get(email.email.toLowerCase());
+                          if (!warmup) return <span className="text-xs text-gray-400">-</span>;
+                          const bounces = warmup.current.warmup_bounces_received_count;
+                          const change = warmup.changes.warmup_bounces_received_count;
+                          return (
+                            <div className={`flex flex-col items-center ${bounces > 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                              <span className="font-medium">{bounces}</span>
+                              {change > 0 && (
+                                <span className="text-xs text-red-600">+{change}</span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="p-4 text-center">
                         <div className="flex items-center justify-center gap-2">
@@ -1620,6 +1966,13 @@ function EmailsPageContent() {
           </div>
         </div>
       )}
+
+      {/* Account Detail Modal */}
+      <AccountDetailModal
+        account={selectedAccountForDetail}
+        isOpen={isDetailModalOpen}
+        onClose={closeAccountDetail}
+      />
     </div>
   );
 }
