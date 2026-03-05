@@ -41,6 +41,8 @@ import {
   MultiAccountComparisonChart,
   generateMockTrendData,
   generateMockAccountTrend,
+  type DateRange,
+  getDateRangeFromPreset,
 } from "@/components/trend-charts";
 import { AccountDetailModal, type AccountDetailData } from "@/components/account-detail-modal";
 
@@ -704,6 +706,9 @@ function EmailsPageContent() {
   
   // Simple time period state for historical comparison
   const [selectedTimePeriod, setSelectedTimePeriod] = useState<7 | 14 | 30>(7);
+  
+  // Date range state for trend charts
+  const [trendDateRange, setTrendDateRange] = useState<DateRange>(() => getDateRangeFromPreset("7d"));
 
   const pageSize = 25;
 
@@ -1521,10 +1526,13 @@ function EmailsPageContent() {
 
         {showCharts && (
           <>
-            {/* Overall Reply Rate Trend - Full Width */}
+            {/* Overall Reply Rate Trend - Full Width with Date Picker */}
             <OverallTrendChart 
-              data={usingMockData ? generateMockTrendData(30) : []} 
+              data={usingMockData ? generateMockTrendData(60) : []} 
               loading={loading || warmupLoading}
+              dateRange={trendDateRange}
+              onDateRangeChange={setTrendDateRange}
+              showDatePicker={true}
             />
 
             {/* Multi-Account Comparison - Top Declining */}
@@ -1532,6 +1540,10 @@ function EmailsPageContent() {
               <MultiAccountComparisonChart 
                 accounts={topDecliningAccounts}
                 title="Top Declining Accounts"
+                dateRange={trendDateRange}
+                onDateRangeChange={setTrendDateRange}
+                showDatePicker={true}
+                loading={warmupLoading}
               />
             )}
 

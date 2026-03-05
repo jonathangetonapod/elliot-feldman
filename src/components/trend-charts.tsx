@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   LineChart,
   Line,
@@ -15,9 +15,16 @@ import {
   Legend,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { 
+  DateRangePicker, 
+  InlineDateRangePicker,
+  type DateRange, 
+  type DatePreset,
+  getDateRangeFromPreset 
+} from "@/components/date-range-picker";
 
 // Types
-interface TrendDataPoint {
+export interface TrendDataPoint {
   date: string;
   avgRate: number;
 }
@@ -65,21 +72,43 @@ function calculateTrendDirection(data: { date: string; rate?: number; avgRate?: 
 interface OverallTrendChartProps {
   data: TrendDataPoint[];
   loading?: boolean;
+  dateRange?: DateRange;
+  onDateRangeChange?: (range: DateRange) => void;
+  showDatePicker?: boolean;
 }
 
-export function OverallTrendChart({ data, loading }: OverallTrendChartProps) {
+export function OverallTrendChart({ 
+  data, 
+  loading, 
+  dateRange,
+  onDateRangeChange,
+  showDatePicker = true,
+}: OverallTrendChartProps) {
+  // Default date range if not provided
+  const [internalDateRange, setInternalDateRange] = useState<DateRange>(
+    () => dateRange || getDateRangeFromPreset("7d")
+  );
+  
+  const activeDateRange = dateRange || internalDateRange;
+  const handleDateChange = onDateRangeChange || setInternalDateRange;
+
+  // Filter data based on date range
   const chartData = useMemo(() => {
     if (!data || data.length === 0) return [];
     
-    // Ensure data is sorted by date
+    const startStr = activeDateRange.startDate.toISOString().split('T')[0];
+    const endStr = activeDateRange.endDate.toISOString().split('T')[0];
+    
+    // Filter and sort by date
     return [...data]
+      .filter(d => d.date >= startStr && d.date <= endStr)
       .sort((a, b) => a.date.localeCompare(b.date))
       .map(d => ({
         date: d.date,
         displayDate: formatDate(d.date),
         avgRate: d.avgRate,
       }));
-  }, [data]);
+  }, [data, activeDateRange]);
 
   const stats = useMemo(() => {
     if (chartData.length < 2) return null;
@@ -94,7 +123,33 @@ export function OverallTrendChart({ data, loading }: OverallTrendChartProps) {
     return { avg, trend, latest, change };
   }, [chartData]);
 
-  if (loading || chartData.length === 0) {
+  // Format date range for display
+  const formatRangeDisplay = () => {
+    const start = activeDateRange.startDate.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      year: 'numeric' 
+    });
+    const end = activeDateRange.endDate.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      year: 'numeric' 
+    });
+    
+    const diffDays = Math.ceil(
+      (activeDateRange.endDate.getTime() - activeDateRange.startDate.getTime()) / (1000 * 60 * 60 * 24)
+    ) + 1;
+    
+    const presetLabel = activeDateRange.preset === "7d" ? "Last 7 days" :
+                        activeDateRange.preset === "14d" ? "Last 14 days" :
+                        activeDateRange.preset === "30d" ? "Last 30 days" : "Custom";
+    
+    return { start, end, diffDays, presetLabel };
+  };
+
+  const rangeInfo = formatRangeDisplay();
+
+  if (loading && chartData.length === 0) {
     return (
       <Card className="mb-6">
         <CardHeader className="pb-2">
@@ -103,10 +158,48 @@ export function OverallTrendChart({ data, loading }: OverallTrendChartProps) {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          {showDatePicker && (
+            <div className="mb-4">
+              <InlineDateRangePicker 
+                value={activeDateRange}
+                onChange={handleDateChange}
+                loading={loading}
+              />
+            </div>
+          )}
+          <div className="h-48 lg:h-64 flex items-center justify-center text-gray-400">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-2 border-indigo-600 border-t-transparent mx-auto mb-2"></div>
+              <span>Loading trend data...</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (chartData.length === 0) {
+    return (
+      <Card className="mb-6">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-lg flex items-center gap-2">
+            📈 Overall Reply Rate Trend
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {showDatePicker && (
+            <div className="mb-4">
+              <InlineDateRangePicker 
+                value={activeDateRange}
+                onChange={handleDateChange}
+                loading={loading}
+              />
+            </div>
+          )}
           <div className="h-48 lg:h-64 flex items-center justify-center text-gray-400">
             <div className="text-center">
               <span className="text-4xl block mb-2">📊</span>
-              <span>Gathering data... Check back tomorrow for trends.</span>
+              <span>No data for selected date range. Try a different period.</span>
             </div>
           </div>
         </CardContent>
@@ -120,28 +213,58 @@ export function OverallTrendChart({ data, loading }: OverallTrendChartProps) {
   return (
     <Card className="mb-6 hover:shadow-lg transition-shadow">
       <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-lg flex items-center gap-2">
-            📈 Overall Reply Rate Trend
-            <span className={`text-sm font-normal ${
-              stats?.trend === 'up' ? 'text-green-600' : 
-              stats?.trend === 'down' ? 'text-red-600' : 
-              'text-gray-500'
-            }`}>
-              {stats?.trend === 'up' ? '↑ Improving' : stats?.trend === 'down' ? '↓ Declining' : '→ Stable'}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <CardTitle className="text-lg flex items-center gap-2">
+              📈 Overall Reply Rate Trend
+              <span className={`text-sm font-normal ${
+                stats?.trend === 'up' ? 'text-green-600' : 
+                stats?.trend === 'down' ? 'text-red-600' : 
+                'text-gray-500'
+              }`}>
+                {stats?.trend === 'up' ? '↑ Improving' : stats?.trend === 'down' ? '↓ Declining' : '→ Stable'}
+              </span>
+            </CardTitle>
+            <div className="flex items-center gap-4 text-sm">
+              <div className="text-gray-500">
+                Avg: <span className="font-bold text-gray-700">{stats?.avg.toFixed(2)}%</span>
+              </div>
+              <div className={`${(stats?.change ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {(stats?.change ?? 0) >= 0 ? '+' : ''}{stats?.change.toFixed(2)}% over {chartData.length}d
+              </div>
+            </div>
+          </div>
+          
+          {/* Date Range Display */}
+          <div className="flex items-center gap-2 text-sm bg-indigo-50 px-3 py-2 rounded-lg">
+            <span className="text-lg">📅</span>
+            <span className="font-medium text-indigo-700">
+              {rangeInfo.start} - {rangeInfo.end}
             </span>
-          </CardTitle>
-          <div className="flex items-center gap-4 text-sm">
-            <div className="text-gray-500">
-              Avg: <span className="font-bold text-gray-700">{stats?.avg.toFixed(2)}%</span>
-            </div>
-            <div className={`${(stats?.change ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {(stats?.change ?? 0) >= 0 ? '+' : ''}{stats?.change.toFixed(2)}% over {chartData.length}d
-            </div>
+            <span className="text-indigo-500">({rangeInfo.presetLabel})</span>
+            {loading && (
+              <div className="animate-spin rounded-full h-3 w-3 border-2 border-indigo-600 border-t-transparent ml-auto" />
+            )}
           </div>
         </div>
       </CardHeader>
       <CardContent>
+        {/* Date Picker */}
+        {showDatePicker && (
+          <div className="mb-4">
+            <InlineDateRangePicker 
+              value={activeDateRange}
+              onChange={handleDateChange}
+              loading={loading}
+            />
+          </div>
+        )}
+        
+        {/* Showing data message */}
+        <div className="text-xs text-gray-500 mb-2">
+          Showing data from {rangeInfo.start} to {rangeInfo.end} ({rangeInfo.diffDays} days)
+        </div>
+
         <div className="h-48 lg:h-64">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
@@ -433,6 +556,10 @@ export function ExpandedAccountChart({ accountData, onClose }: ExpandedAccountCh
 interface MultiAccountChartProps {
   accounts: AccountTrendData[];
   title?: string;
+  dateRange?: DateRange;
+  onDateRangeChange?: (range: DateRange) => void;
+  showDatePicker?: boolean;
+  loading?: boolean;
 }
 
 // Distinct colors for up to 10 accounts
@@ -449,7 +576,39 @@ const ACCOUNT_COLORS = [
   '#6b7280', // gray
 ];
 
-export function MultiAccountComparisonChart({ accounts, title = "Top Declining Accounts" }: MultiAccountChartProps) {
+export function MultiAccountComparisonChart({ 
+  accounts, 
+  title = "Top Declining Accounts",
+  dateRange,
+  onDateRangeChange,
+  showDatePicker = false,
+  loading = false,
+}: MultiAccountChartProps) {
+  // Default date range if not provided
+  const [internalDateRange, setInternalDateRange] = useState<DateRange>(
+    () => dateRange || getDateRangeFromPreset("7d")
+  );
+  
+  const activeDateRange = dateRange || internalDateRange;
+  const handleDateChange = onDateRangeChange || setInternalDateRange;
+
+  // Format date range for display
+  const rangeInfo = useMemo(() => {
+    const start = activeDateRange.startDate.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      year: 'numeric' 
+    });
+    const end = activeDateRange.endDate.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      year: 'numeric' 
+    });
+    const presetLabel = activeDateRange.preset === "7d" ? "Last 7 days" :
+                        activeDateRange.preset === "14d" ? "Last 14 days" :
+                        activeDateRange.preset === "30d" ? "Last 30 days" : "Custom";
+    return { start, end, presetLabel };
+  }, [activeDateRange]);
   // Build unified timeline from all accounts
   const { chartData, accountLabels } = useMemo(() => {
     if (!accounts || accounts.length === 0) return { chartData: [], accountLabels: [] };
@@ -493,11 +652,30 @@ export function MultiAccountComparisonChart({ accounts, title = "Top Declining A
     return (
       <Card className="mb-6">
         <CardHeader className="pb-2">
-          <CardTitle className="text-lg flex items-center gap-2">
-            📉 {title}
-          </CardTitle>
+          <div className="flex flex-col gap-2">
+            <CardTitle className="text-lg flex items-center gap-2">
+              📉 {title}
+            </CardTitle>
+            {/* Date Range Display */}
+            <div className="flex items-center gap-2 text-sm bg-red-50 px-3 py-2 rounded-lg">
+              <span className="text-lg">📅</span>
+              <span className="font-medium text-red-700">
+                {rangeInfo.start} - {rangeInfo.end}
+              </span>
+              <span className="text-red-500">({rangeInfo.presetLabel})</span>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
+          {showDatePicker && (
+            <div className="mb-4">
+              <InlineDateRangePicker 
+                value={activeDateRange}
+                onChange={handleDateChange}
+                loading={loading}
+              />
+            </div>
+          )}
           <div className="h-48 lg:h-64 flex items-center justify-center text-gray-400">
             <div className="text-center">
               <span className="text-4xl block mb-2">✨</span>
@@ -512,14 +690,38 @@ export function MultiAccountComparisonChart({ accounts, title = "Top Declining A
   return (
     <Card className="mb-6 hover:shadow-lg transition-shadow border-red-100">
       <CardHeader className="pb-2">
-        <CardTitle className="text-lg flex items-center gap-2">
-          📉 {title}
-          <span className="text-sm font-normal text-red-500">
-            ({accounts.length} account{accounts.length !== 1 ? 's' : ''})
-          </span>
-        </CardTitle>
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-lg flex items-center gap-2">
+              📉 {title}
+              <span className="text-sm font-normal text-red-500">
+                ({accounts.length} account{accounts.length !== 1 ? 's' : ''})
+              </span>
+            </CardTitle>
+            {loading && (
+              <div className="animate-spin rounded-full h-4 w-4 border-2 border-red-600 border-t-transparent" />
+            )}
+          </div>
+          {/* Date Range Display */}
+          <div className="flex items-center gap-2 text-sm bg-red-50 px-3 py-2 rounded-lg">
+            <span className="text-lg">📅</span>
+            <span className="font-medium text-red-700">
+              {rangeInfo.start} - {rangeInfo.end}
+            </span>
+            <span className="text-red-500">({rangeInfo.presetLabel})</span>
+          </div>
+        </div>
       </CardHeader>
       <CardContent>
+        {showDatePicker && (
+          <div className="mb-4">
+            <InlineDateRangePicker 
+              value={activeDateRange}
+              onChange={handleDateChange}
+              loading={loading}
+            />
+          </div>
+        )}
         {/* Legend */}
         <div className="flex flex-wrap gap-3 mb-3">
           {accountLabels.map((label) => (
@@ -689,3 +891,7 @@ export function generateMockAccountTrend(accountId: number, email: string, trend
     health: percentChange <= -50 ? 'declining' : percentChange <= -25 ? 'warning' : percentChange >= 25 ? 'improving' : 'stable',
   };
 }
+
+// Re-export DateRange types for convenience
+export type { DateRange, DatePreset };
+export { getDateRangeFromPreset };
