@@ -34,6 +34,14 @@ import {
   type TrendHealth,
   type HistoricalTrendAnalysis,
 } from "@/lib/account-history";
+import {
+  OverallTrendChart,
+  Sparkline as EnhancedSparkline,
+  ExpandedAccountChart,
+  MultiAccountComparisonChart,
+  generateMockTrendData,
+  generateMockAccountTrend,
+} from "@/components/trend-charts";
 
 interface BisonSenderEmail {
   id: number;
@@ -54,13 +62,13 @@ interface BisonSenderEmail {
 function transformBisonEmail(bisonEmail: BisonSenderEmail): DisplayEmail {
   const emailParts = bisonEmail.email.split("@");
   const domain = emailParts[1] || "unknown.com";
-  
+
   // Calculate warmup day based on created_at (30 days warmup period)
   const createdAt = new Date(bisonEmail.created_at);
   const now = new Date();
   const daysSinceCreation = Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
   const warmupDay = Math.min(daysSinceCreation, 30);
-  
+
   // Determine warmup status based on warmup_enabled and daily_limit
   let warmupStatus: WarmupStatus;
   if (!bisonEmail.warmup_enabled) {
@@ -70,15 +78,15 @@ function transformBisonEmail(bisonEmail: BisonSenderEmail): DisplayEmail {
   } else {
     warmupStatus = "warming";
   }
-  
+
   // Calculate warmup ready date
   const warmupReadyDate = new Date(createdAt);
   warmupReadyDate.setDate(warmupReadyDate.getDate() + 30);
-  
+
   // Calculate reply rate from real data
   const emailsSent = bisonEmail.emails_sent_count || 0;
   const uniqueReplies = bisonEmail.unique_replied_count || bisonEmail.total_replied_count || 0;
-  
+
   let replyRate: number;
   if (emailsSent > 0) {
     replyRate = (uniqueReplies / emailsSent) * 100;
@@ -86,7 +94,7 @@ function transformBisonEmail(bisonEmail: BisonSenderEmail): DisplayEmail {
     // No emails sent yet - neutral status
     replyRate = 0;
   }
-  
+
   return {
     id: bisonEmail.id,
     email: bisonEmail.email,
@@ -114,9 +122,9 @@ function transformBisonEmail(bisonEmail: BisonSenderEmail): DisplayEmail {
 }
 
 // Extended type for display
-type DisplayEmail = SenderEmail & { 
-  warmupEnabled?: boolean; 
-  totalSent?: number; 
+type DisplayEmail = SenderEmail & {
+  warmupEnabled?: boolean;
+  totalSent?: number;
   totalReplies?: number;
   createdAt?: string;
   daysActive?: number;
@@ -127,23 +135,23 @@ type DisplayEmail = SenderEmail & {
 // Mini Sparkline component for reply rate history
 function MiniSparkline({ data, width = 60, height = 20 }: { data: number[]; width?: number; height?: number }) {
   if (data.length < 2) {
-    return <span className="text-xs text-gray-400">—</span>;
+    return <span className="text-xs text-gray-400">-</span>;
   }
-  
+
   const min = Math.min(...data);
   const max = Math.max(...data);
   const range = max - min || 1;
-  
+
   const points = data.map((value, index) => {
     const x = (index / (data.length - 1)) * width;
     const y = height - ((value - min) / range) * height;
     return `${x},${y}`;
   }).join(' ');
-  
+
   const lastValue = data[data.length - 1];
   const firstValue = data[0];
   const color = lastValue > firstValue ? '#22c55e' : lastValue < firstValue ? '#ef4444' : '#9ca3af';
-  
+
   return (
     <svg width={width} height={height} className="inline-block">
       <polyline
@@ -168,9 +176,9 @@ function TrendHealthIndicator({ analysis }: { analysis: HistoricalTrendAnalysis 
       </div>
     );
   }
-  
+
   const { emoji, label, color } = getHealthLabel(analysis.health);
-  
+
   return (
     <div className="flex flex-col items-center gap-1">
       <span className="text-lg">{emoji}</span>
@@ -182,9 +190,9 @@ function TrendHealthIndicator({ analysis }: { analysis: HistoricalTrendAnalysis 
 // NEW: Trend change display (Was X% → Now Y%)
 function TrendChangeDisplay({ analysis, compact = false }: { analysis: HistoricalTrendAnalysis | null | undefined; compact?: boolean }) {
   if (!analysis) {
-    return <span className="text-xs text-gray-400">—</span>;
+    return <span className="text-xs text-gray-400">-</span>;
   }
-  
+
   if (analysis.health === 'gathering-data') {
     return (
       <div className={`${compact ? 'text-xs' : 'text-sm'} text-gray-500`}>
@@ -196,10 +204,10 @@ function TrendChangeDisplay({ analysis, compact = false }: { analysis: Historica
       </div>
     );
   }
-  
+
   const changeIcon = analysis.percentChange > 0 ? '↑' : analysis.percentChange < 0 ? '↓' : '→';
   const changeColor = analysis.percentChange > 0 ? 'text-green-600' : analysis.percentChange < 0 ? 'text-red-600' : 'text-gray-500';
-  
+
   if (compact) {
     return (
       <div className="text-xs">
@@ -212,7 +220,7 @@ function TrendChangeDisplay({ analysis, compact = false }: { analysis: Historica
       </div>
     );
   }
-  
+
   return (
     <div className="text-sm">
       <div className="text-gray-500 mb-1">
@@ -233,19 +241,19 @@ function ReplyRateBar({ rate, hasSends }: { rate: number; hasSends: boolean }) {
         <div className="w-20 h-3 bg-gray-100 rounded-full overflow-hidden">
           <div className="h-full bg-gray-300 w-0" />
         </div>
-        <span className="text-gray-400 text-sm">—</span>
+        <span className="text-gray-400 text-sm">-</span>
       </div>
     );
   }
-  
+
   const percentage = Math.min(rate * 20, 100); // Scale: 5% = 100% bar width
   // Use neutral colors - health is now shown separately via trend analysis
   const color = "bg-blue-500";
-  
+
   return (
     <div className="flex items-center gap-2">
       <div className="w-20 h-3 bg-gray-200 rounded-full overflow-hidden">
-        <div 
+        <div
           className={`h-full ${color} rounded-full transition-all duration-300`}
           style={{ width: `${percentage}%` }}
         />
@@ -267,9 +275,9 @@ function WarmupStageIndicator({ dailyLimit, warmupEnabled }: { dailyLimit: numbe
     if (dailyLimit <= 35) return { emoji: "🟡", label: "Maturing", color: "text-yellow-600", bgColor: "bg-yellow-100" };
     return { emoji: "🟢", label: "Ready", color: "text-green-600", bgColor: "bg-green-100" };
   };
-  
+
   const stage = getStage();
-  
+
   // Progress visualization
   const stages = [
     { min: 5, max: 10, emoji: "🔴" },
@@ -277,15 +285,15 @@ function WarmupStageIndicator({ dailyLimit, warmupEnabled }: { dailyLimit: numbe
     { min: 21, max: 35, emoji: "🟡" },
     { min: 36, max: 50, emoji: "🟢" },
   ];
-  
+
   const currentStageIndex = dailyLimit <= 10 ? 0 : dailyLimit <= 20 ? 1 : dailyLimit <= 35 ? 2 : 3;
-  
+
   return (
     <div className="flex flex-col items-center gap-1">
       {/* Stage dots */}
       <div className="flex items-center gap-0.5">
         {stages.map((s, idx) => (
-          <div 
+          <div
             key={idx}
             className={`w-2 h-2 rounded-full transition-all ${
               idx <= currentStageIndex && warmupEnabled
@@ -312,7 +320,7 @@ function MiniHealthPie({ stats }: { stats: { declining: number; warning: number;
     { name: "Declining", value: stats.declining, color: "#ef4444" },
     { name: "Gathering Data", value: stats.gatheringData, color: "#9ca3af" },
   ].filter(d => d.value > 0);
-  
+
   return (
     <div className="w-16 h-16">
       <ResponsiveContainer width="100%" height="100%">
@@ -346,9 +354,9 @@ function TrendDistributionChart({ stats }: { stats: { declining: number; warning
     { name: "Declining", value: stats.declining, color: "#ef4444" },
     { name: "New", value: stats.gatheringData, color: "#9ca3af" },
   ].filter(d => d.value > 0);
-  
+
   const total = data.reduce((sum, d) => sum + d.value, 0);
-  
+
   return (
     <div className="flex items-center gap-4">
       <div className="w-32 h-32">
@@ -388,7 +396,7 @@ function TrendDistributionChart({ stats }: { stats: { declining: number; warning
 function EmailsPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  
+
   // Initialize state from URL params
   const [search, setSearch] = useState(searchParams.get("search") || "");
   const [healthFilter, setHealthFilter] = useState<TrendHealth | "all">(
@@ -408,7 +416,7 @@ function EmailsPageContent() {
   const [apiEmails, setApiEmails] = useState<DisplayEmail[] | null>(null);
   const [usingMockData, setUsingMockData] = useState(false);
   const [trendAnalysisMap, setTrendAnalysisMap] = useState<Map<number, HistoricalTrendAnalysis>>(new Map());
-  
+
   // Trends data
   const [overallTrend, setOverallTrend] = useState<ReturnType<typeof getOverallReplyRateTrend>>([]);
   const [atRiskAccounts, setAtRiskAccounts] = useState<ReturnType<typeof predictAtRiskAccounts>>([]);
@@ -419,19 +427,20 @@ function EmailsPageContent() {
     toStatus: TrendHealth;
     percentDrop: number;
   }>>([]);
-  
+
   // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  
+
   // Charts visibility toggle
   const [showCharts, setShowCharts] = useState(true);
-  
+  const [expandedAccountId, setExpandedAccountId] = useState<number | null>(null);
+
   const pageSize = 25;
 
   // Update URL when filters change
   const updateURL = useCallback((
-    newHealth: TrendHealth | "all", 
-    newWarmup: "on" | "off" | "all", 
+    newHealth: TrendHealth | "all",
+    newWarmup: "on" | "off" | "all",
     newSearch: string,
     newSort: string,
     newOrder: string
@@ -450,36 +459,36 @@ function EmailsPageContent() {
   useEffect(() => {
     async function fetchEmails() {
       setLoading(true);
-      
+
       try {
         const response = await fetch("/api/bison?endpoint=sender-emails");
-        
+
         if (!response.ok) {
           console.warn("Bison API unavailable, falling back to mock data");
           setUsingMockData(true);
           setApiEmails(null);
           return;
         }
-        
+
         const data = await response.json();
-        
+
         if (data.error) {
           console.warn("Bison API error:", data.error);
           setUsingMockData(true);
           setApiEmails(null);
           return;
         }
-        
+
         // Handle both array response and paginated response
         const emails = Array.isArray(data) ? data : (data.data || data.items || []);
-        
+
         if (emails.length === 0) {
           console.warn("No emails from Bison API, falling back to mock data");
           setUsingMockData(true);
           setApiEmails(null);
           return;
         }
-        
+
         const transformedEmails = emails.map(transformBisonEmail);
         setApiEmails(transformedEmails);
         setUsingMockData(false);
@@ -491,14 +500,14 @@ function EmailsPageContent() {
         setLoading(false);
       }
     }
-    
+
     fetchEmails();
   }, []);
 
   // Take snapshot for history tracking when emails load
   useEffect(() => {
     if (loading || !apiEmails || apiEmails.length === 0) return;
-    
+
     // Transform to the format expected by takeSnapshot
     const accountData = (apiEmails as DisplayEmail[]).map(e => ({
       id: e.id,
@@ -510,10 +519,10 @@ function EmailsPageContent() {
       totalReplies: e.totalReplies,
       dailyLimit: e.dailyLimit,
     }));
-    
+
     // Take snapshot (will only save once per day)
     takeSnapshot(accountData);
-    
+
     // Calculate trend analysis for all accounts
     const analysisMap = new Map<number, HistoricalTrendAnalysis>();
     for (const email of apiEmails) {
@@ -523,7 +532,7 @@ function EmailsPageContent() {
       }
     }
     setTrendAnalysisMap(analysisMap);
-    
+
     // Load trends data
     setOverallTrend(getOverallReplyRateTrend());
     setAtRiskAccounts(predictAtRiskAccounts(7));
@@ -533,23 +542,23 @@ function EmailsPageContent() {
   // Calculate stats for the summary bar - now trend-based
   const summaryStats = useMemo(() => {
     const allEmails = apiEmails || getEmails({ page: 1, pageSize: 10000 }).data;
-    
+
     const warmupOn = allEmails.filter(e => (e as DisplayEmail).warmupEnabled !== false && e.warmupStatus !== "paused").length;
     const warmupOff = allEmails.filter(e => (e as DisplayEmail).warmupEnabled === false || e.warmupStatus === "paused").length;
-    
+
     // Calculate average reply rate (only for accounts with sends)
     const emailsWithSends = allEmails.filter(e => e.sentLast7Days > 0 || (e as DisplayEmail).totalSent && (e as DisplayEmail).totalSent! > 0);
-    const avgReplyRate = emailsWithSends.length > 0 
+    const avgReplyRate = emailsWithSends.length > 0
       ? emailsWithSends.reduce((sum, e) => sum + e.replyRate, 0) / emailsWithSends.length
       : 0;
-    
+
     // Count by trend-based health
     let declining = 0;
     let warning = 0;
     let stable = 0;
     let improving = 0;
     let gatheringData = 0;
-    
+
     for (const email of allEmails) {
       const analysis = trendAnalysisMap.get(email.id);
       if (!analysis) {
@@ -564,7 +573,7 @@ function EmailsPageContent() {
         }
       }
     }
-    
+
     return {
       total: allEmails.length,
       warmupOn,
@@ -578,16 +587,87 @@ function EmailsPageContent() {
     };
   }, [apiEmails, trendAnalysisMap]);
 
+  // Get expanded account data for detail view
+  const expandedAccountData = useMemo(() => {
+    if (!expandedAccountId) return null;
+    
+    const analysis = trendAnalysisMap.get(expandedAccountId);
+    const email = apiEmails?.find(e => e.id === expandedAccountId) || 
+                  getEmails({ page: 1, pageSize: 10000 }).data.find(e => e.id === expandedAccountId);
+    
+    if (!email) return null;
+    
+    // If we have analysis with history, use it
+    if (analysis && analysis.replyRates.length > 0) {
+      return {
+        accountId: expandedAccountId,
+        email: email.email,
+        replyRates: analysis.replyRates,
+        currentAvg: analysis.currentAvg,
+        baselineAvg: analysis.baselineAvg,
+        percentChange: analysis.percentChange,
+        health: analysis.health,
+      };
+    }
+    
+    // Generate mock data for demo if no history
+    const mockTrend = usingMockData ? 
+      (email.replyRate < 1 ? 'down' : email.replyRate > 3 ? 'up' : 'stable') as 'up' | 'down' | 'stable' : 
+      'stable';
+    return generateMockAccountTrend(expandedAccountId, email.email, mockTrend, 30);
+  }, [expandedAccountId, trendAnalysisMap, apiEmails, usingMockData]);
+
+  // Get top 5 declining accounts for comparison chart
+  const topDecliningAccounts = useMemo(() => {
+    const declining: Array<{
+      accountId: number;
+      email: string;
+      replyRates: { date: string; rate: number }[];
+      currentAvg: number;
+      baselineAvg: number;
+      percentChange: number;
+      health: string;
+    }> = [];
+    
+    // Get accounts with declining or warning status
+    trendAnalysisMap.forEach((analysis, accountId) => {
+      if (analysis.health === 'declining' || analysis.health === 'warning') {
+        declining.push({
+          accountId,
+          email: analysis.email,
+          replyRates: analysis.replyRates,
+          currentAvg: analysis.currentAvg,
+          baselineAvg: analysis.baselineAvg,
+          percentChange: analysis.percentChange,
+          health: analysis.health,
+        });
+      }
+    });
+    
+    // If using mock data and no real declining accounts, generate some
+    if (usingMockData && declining.length === 0) {
+      const mockEmails = ['john@acme.com', 'sarah@startup.io', 'mike@corp.net', 'lisa@tech.co', 'alex@biz.org'];
+      return mockEmails.slice(0, 5).map((email, idx) => 
+        generateMockAccountTrend(1000 + idx, email, 'down', 30)
+      );
+    }
+    
+    // Sort by percent change (most negative first) and take top 5
+    return declining
+      .sort((a, b) => a.percentChange - b.percentChange)
+      .slice(0, 5);
+  }, [trendAnalysisMap, usingMockData]);
+
   // Calculate counts for quick filters (before filtering)
   const filterCounts = useMemo(() => {
     const allEmails = apiEmails || getEmails({ page: 1, pageSize: 10000 }).data;
-    
+
     let declining = 0;
     let warning = 0;
     let stable = 0;
     let improving = 0;
     let gatheringData = 0;
-    
+
     for (const email of allEmails) {
       const analysis = trendAnalysisMap.get(email.id);
       if (!analysis) {
@@ -602,7 +682,7 @@ function EmailsPageContent() {
         }
       }
     }
-    
+
     return {
       all: allEmails.length,
       declining,
@@ -635,10 +715,10 @@ function EmailsPageContent() {
       });
       return { ...result, filteredEmails: result.data };
     }
-    
+
     // Filter API data locally
     let filteredEmails = [...apiEmails] as DisplayEmail[];
-    
+
     // Search filter
     if (search) {
       const searchLower = search.toLowerCase();
@@ -648,7 +728,7 @@ function EmailsPageContent() {
           e.name.toLowerCase().includes(searchLower)
       );
     }
-    
+
     // Health filter (trend-based)
     if (healthFilter !== "all") {
       filteredEmails = filteredEmails.filter((e) => {
@@ -657,14 +737,14 @@ function EmailsPageContent() {
         return analysis.health === healthFilter;
       });
     }
-    
+
     // Warmup filter (ON/OFF based on warmup_enabled)
     if (warmupFilter === "on") {
       filteredEmails = filteredEmails.filter((e) => e.warmupEnabled !== false && e.warmupStatus !== "paused");
     } else if (warmupFilter === "off") {
       filteredEmails = filteredEmails.filter((e) => e.warmupEnabled === false || e.warmupStatus === "paused");
     }
-    
+
     // Sort
     filteredEmails.sort((a, b) => {
       let aVal: number, bVal: number;
@@ -685,12 +765,12 @@ function EmailsPageContent() {
       }
       return sortOrder === "asc" ? aVal - bVal : bVal - aVal;
     });
-    
+
     const total = filteredEmails.length;
     const totalPages = Math.ceil(total / pageSize);
     const start = (page - 1) * pageSize;
     const data = filteredEmails.slice(start, start + pageSize);
-    
+
     return { data, total, page, pageSize, totalPages, filteredEmails };
   }, [apiEmails, page, pageSize, search, healthFilter, warmupFilter, sortBy, sortOrder, trendAnalysisMap]);
 
@@ -710,7 +790,7 @@ function EmailsPageContent() {
   const selectAllOnPage = useCallback(() => {
     const currentPageIds = emails.map(e => e.id);
     const allSelected = currentPageIds.every(id => selectedIds.has(id));
-    
+
     if (allSelected) {
       // Deselect all on current page
       setSelectedIds(prev => {
@@ -744,10 +824,10 @@ function EmailsPageContent() {
 
   const handleExportSelected = useCallback(() => {
     if (selectedIds.size === 0) return;
-    
+
     const allEmails = apiEmails || getEmails({ page: 1, pageSize: 10000 }).data;
     const selectedEmails = allEmails.filter(e => selectedIds.has(e.id)) as DisplayEmail[];
-    
+
     // Generate CSV
     const headers = ["Email", "Name", "Health", "Warmup", "Reply Rate", "Baseline Avg", "Current Avg", "% Change", "Daily Limit", "Total Sent", "Total Replies"];
     const rows = selectedEmails.map(e => {
@@ -767,19 +847,19 @@ function EmailsPageContent() {
         e.totalReplies || e.repliesLast7Days,
       ];
     });
-    
+
     const csvContent = [
       headers.join(","),
       ...rows.map(row => row.map(cell => `"${cell}"`).join(","))
     ].join("\n");
-    
+
     // Download
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = `email-accounts-${new Date().toISOString().split("T")[0]}.csv`;
     link.click();
-    
+
     toast.success(`Exported ${selectedIds.size} email(s) to CSV`);
   }, [selectedIds, apiEmails, trendAnalysisMap]);
 
@@ -927,61 +1007,35 @@ function EmailsPageContent() {
           <span>{showCharts ? '▼' : '▶'}</span>
           <span>📈 Trend Charts</span>
         </button>
-        
+
         {showCharts && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Reply Rate Over Time */}
-            <Card>
-              <CardHeader className="pb-2 px-3 lg:px-6">
-                <CardTitle className="text-sm lg:text-lg flex items-center gap-2">
-                  💬 Reply Rate Over Time
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="px-2 lg:px-6">
-                {overallTrend.length > 1 ? (
-                  <div className="h-48">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={overallTrend} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                        <XAxis 
-                          dataKey="date" 
-                          tickFormatter={(value) => new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                          tick={{ fontSize: 9 }}
-                        />
-                        <YAxis 
-                          tickFormatter={(value) => `${value}%`}
-                          tick={{ fontSize: 9 }}
-                          domain={[0, 'auto']}
-                          width={35}
-                        />
-                        <Tooltip 
-                          formatter={(value) => [`${(value as number)?.toFixed(2) ?? 0}%`, 'Avg Reply Rate']}
-                          labelFormatter={(label) => new Date(label as string).toLocaleDateString()}
-                        />
-                        <Line 
-                          type="monotone" 
-                          dataKey="avgRate" 
-                          stroke="#3b82f6" 
-                          strokeWidth={2}
-                          dot={{ fill: '#3b82f6', strokeWidth: 2, r: 3 }}
-                          activeDot={{ r: 5 }}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                ) : (
-                  <div className="h-48 flex items-center justify-center text-gray-500">
-                    <div className="text-center">
-                      <span className="text-3xl block mb-2">📊</span>
-                      <p className="text-sm">Chart will appear after 2+ days of data</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+          <>
+            {/* Overall Reply Rate Trend - Full Width */}
+            <OverallTrendChart 
+              data={overallTrend.length > 0 ? overallTrend : (usingMockData ? generateMockTrendData(30) : [])} 
+              loading={loading}
+            />
+
+            {/* Multi-Account Comparison - Top Declining */}
+            {(topDecliningAccounts.length > 0 || usingMockData) && (
+              <MultiAccountComparisonChart 
+                accounts={topDecliningAccounts}
+                title="Top Declining Accounts"
+              />
+            )}
+
+            {/* Expanded Account Detail View */}
+            {expandedAccountData && (
+              <div className="mb-6">
+                <ExpandedAccountChart 
+                  accountData={expandedAccountData}
+                  onClose={() => setExpandedAccountId(null)}
+                />
+              </div>
+            )}
 
             {/* Trend Distribution */}
-            <Card>
+            <Card className="mb-6">
               <CardHeader className="pb-2 px-3 lg:px-6">
                 <CardTitle className="text-sm lg:text-lg flex items-center gap-2">
                   📊 Account Health Distribution
@@ -991,7 +1045,7 @@ function EmailsPageContent() {
                 <TrendDistributionChart stats={filterCounts} />
               </CardContent>
             </Card>
-          </div>
+          </>
         )}
       </div>
 
@@ -1012,7 +1066,7 @@ function EmailsPageContent() {
               <CardContent className="pt-0">
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {atRiskAccounts.slice(0, 5).map((account) => (
-                    <div 
+                    <div
                       key={account.accountId}
                       className="p-2 rounded-lg bg-red-50 border border-red-100 text-sm"
                     >
@@ -1049,7 +1103,7 @@ function EmailsPageContent() {
                   {recentlyDegraded.slice(0, 5).map((item, index) => {
                     const healthInfo = getHealthLabel(item.toStatus);
                     return (
-                      <div 
+                      <div
                         key={`${item.accountId}-${index}`}
                         className="p-2 rounded-lg bg-yellow-50 border border-yellow-100 text-sm"
                       >
@@ -1233,7 +1287,7 @@ function EmailsPageContent() {
             {allOnPageSelected ? "Deselect all on page" : "Select all on page"}
           </span>
         </div>
-        
+
         {(emails as DisplayEmail[]).map((email) => {
           const hasSends = (email.totalSent || email.sentLast7Days) > 0;
           const isSelected = selectedIds.has(email.id);
@@ -1241,12 +1295,12 @@ function EmailsPageContent() {
           const trend = calculateAccountTrend(email.id);
           const trendAnalysis = trendAnalysisMap.get(email.id);
           const healthInfo = trendAnalysis ? getHealthLabel(trendAnalysis.health) : null;
-          
+
           return (
-            <Card 
-              key={email.id} 
+            <Card
+              key={email.id}
               className={`cursor-pointer transition-all hover:shadow-md ${
-                isSelected ? "ring-2 ring-blue-500 bg-blue-50" : 
+                isSelected ? "ring-2 ring-blue-500 bg-blue-50" :
                 trendAnalysis?.health === "declining" ? "border-red-200 bg-red-50" :
                 trendAnalysis?.health === "warning" ? "border-yellow-200 bg-yellow-50" :
                 "hover:bg-gray-50"
@@ -1270,7 +1324,7 @@ function EmailsPageContent() {
                         <div className="text-xs text-gray-500">{email.name}</div>
                       </div>
                     </div>
-                    
+
                     {/* Health Status - NEW */}
                     <div className="bg-white rounded-lg p-3 mb-3 border">
                       <div className="flex items-center justify-between mb-2">
@@ -1283,24 +1337,46 @@ function EmailsPageContent() {
                       </div>
                       <TrendChangeDisplay analysis={trendAnalysis} compact />
                     </div>
-                    
+
                     {/* Reply Rate Visual */}
                     <div className="bg-white rounded-lg p-3 mb-3 border">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs text-gray-500">💬 Current Reply Rate</span>
                         {trend && trend.replyRates.length > 1 && (
-                          <MiniSparkline data={trend.replyRates.map(r => r.rate)} />
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedAccountId(expandedAccountId === email.id ? null : email.id);
+                            }}
+                            className="hover:scale-110 transition-transform"
+                            title="Click to view full trend"
+                          >
+                            <EnhancedSparkline data={trend.replyRates} width={70} height={24} />
+                          </button>
                         )}
                       </div>
                       <ReplyRateBar rate={email.replyRate} hasSends={hasSends} />
                     </div>
-                    
+
+                    {/* View Trend Button */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full mb-3"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedAccountId(expandedAccountId === email.id ? null : email.id);
+                      }}
+                    >
+                      {expandedAccountId === email.id ? '📊 Hide Trend' : '📈 View Full Trend'}
+                    </Button>
+
                     {/* Warmup Stage */}
                     <div className="bg-white rounded-lg p-3 border mb-3">
                       <div className="text-xs text-gray-500 mb-2">🔥 Warmup Stage</div>
                       <WarmupStageIndicator dailyLimit={email.dailyLimit} warmupEnabled={warmupEnabled} />
                     </div>
-                    
+
                     <div className="grid grid-cols-3 gap-2 text-xs">
                       <div className="bg-gray-50 p-2 rounded">
                         <div className="text-gray-500">📅 Active</div>
@@ -1342,7 +1418,7 @@ function EmailsPageContent() {
                   <th className="text-center p-4 font-medium text-sm text-gray-600">Health</th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">Trend</th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">
-                    <button 
+                    <button
                       onClick={() => {
                         setSortBy("replyRate");
                         const newOrder = sortBy === "replyRate" ? (sortOrder === "asc" ? "desc" : "asc") : "asc";
@@ -1356,7 +1432,7 @@ function EmailsPageContent() {
                     </button>
                   </th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">
-                    <button 
+                    <button
                       onClick={() => {
                         setSortBy("dailyLimit");
                         const newOrder = sortBy === "dailyLimit" ? (sortOrder === "asc" ? "desc" : "asc") : "desc";
@@ -1372,7 +1448,7 @@ function EmailsPageContent() {
                   <th className="text-center p-4 font-medium text-sm text-gray-600">📅 Days Active</th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">📈 Sparkline</th>
                   <th className="text-right p-4 font-medium text-sm text-gray-600">
-                    <button 
+                    <button
                       onClick={() => {
                         setSortBy("totalSent");
                         const newOrder = sortBy === "totalSent" ? (sortOrder === "asc" ? "desc" : "asc") : "desc";
@@ -1395,12 +1471,12 @@ function EmailsPageContent() {
                   const warmupEnabled = email.warmupEnabled !== false && email.warmupStatus !== "paused";
                   const trend = calculateAccountTrend(email.id);
                   const trendAnalysis = trendAnalysisMap.get(email.id);
-                  
+
                   return (
-                    <tr 
-                      key={email.id} 
+                    <tr
+                      key={email.id}
                       className={`border-b cursor-pointer transition-all ${
-                        isSelected ? "bg-blue-50" : 
+                        isSelected ? "bg-blue-50" :
                         trendAnalysis?.health === "declining" ? "bg-red-50 hover:bg-red-100" :
                         trendAnalysis?.health === "warning" ? "bg-yellow-50 hover:bg-yellow-100" :
                         "hover:bg-gray-50"
@@ -1440,8 +1516,19 @@ function EmailsPageContent() {
                       </td>
                       <td className="p-4 text-center">
                         <div className="flex items-center justify-center gap-2">
-                          {trend && trend.replyRates.length > 1 && (
-                            <MiniSparkline data={trend.replyRates.map(r => r.rate)} />
+                          {trend && trend.replyRates.length > 1 ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExpandedAccountId(expandedAccountId === email.id ? null : email.id);
+                              }}
+                              className="hover:scale-110 transition-transform cursor-pointer"
+                              title="Click to expand chart"
+                            >
+                              <EnhancedSparkline data={trend.replyRates} width={70} height={24} />
+                            </button>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
                           )}
                         </div>
                       </td>

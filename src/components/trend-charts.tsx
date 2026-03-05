@@ -385,7 +385,7 @@ export function ExpandedAccountChart({ accountData, onClose }: ExpandedAccountCh
                 domain={['auto', 'auto']}
               />
               <Tooltip 
-                formatter={(value: number) => [`${value.toFixed(2)}%`, 'Reply Rate']}
+                formatter={(value) => [`${Number(value).toFixed(2)}%`, 'Reply Rate']}
                 labelFormatter={(label) => `Date: ${label}`}
                 contentStyle={{ 
                   borderRadius: '8px', 
@@ -555,10 +555,10 @@ export function MultiAccountComparisonChart({ accounts, title = "Top Declining A
                 domain={['auto', 'auto']}
               />
               <Tooltip 
-                formatter={(value: number | null, name: string) => {
-                  if (value === null) return ['—', name];
+                formatter={(value, name) => {
+                  if (value === null || value === undefined) return ['—', String(name)];
                   const label = accountLabels.find(l => l.key === name);
-                  return [`${value.toFixed(2)}%`, label?.email || name];
+                  return [`${Number(value).toFixed(2)}%`, label?.email || String(name)];
                 }}
                 labelFormatter={(label) => `Date: ${label}`}
                 contentStyle={{ 
