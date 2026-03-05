@@ -1973,6 +1973,9 @@ function EmailsPageContent() {
                     </button>
                   </th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">🔥 WU Score</th>
+                  <th className="text-center p-4 font-medium text-sm text-gray-600">
+                    📅 {selectedTimePeriod}d Change
+                  </th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">🚫 Bounces</th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">📈 Sparkline</th>
                   <th className="text-right p-4 font-medium text-sm text-gray-600">
@@ -1999,12 +2002,21 @@ function EmailsPageContent() {
                   const warmupEnabled = email.warmupEnabled !== false && email.warmupStatus !== "paused";
                   const trend = calculateAccountTrend(email.id);
                   const trendAnalysis = trendAnalysisMap.get(email.id);
+                  
+                  // Get warmup stats for this account to show period change
+                  const warmupStats = warmupStatsMap.get(email.email.toLowerCase());
+                  const periodChange = warmupStats?.changes?.warmup_score;
+                  const hasSignificantDrop = periodChange !== undefined && periodChange < -20;
+                  const hasWarningDrop = periodChange !== undefined && periodChange >= -20 && periodChange < -10;
+                  const hasImproved = periodChange !== undefined && periodChange > 10;
 
                   return (
                     <tr
                       key={email.id}
                       className={`border-b cursor-pointer transition-all ${
                         isSelected ? "bg-blue-50" :
+                        hasSignificantDrop ? "bg-red-100 hover:bg-red-200" :
+                        hasWarningDrop ? "bg-yellow-50 hover:bg-yellow-100" :
                         trendAnalysis?.health === "declining" ? "bg-red-50 hover:bg-red-100" :
                         trendAnalysis?.health === "warning" ? "bg-yellow-50 hover:bg-yellow-100" :
                         "hover:bg-gray-50"
@@ -2018,9 +2030,20 @@ function EmailsPageContent() {
                         />
                       </td>
                       <td className="p-4">
-                        <div>
-                          <div className="font-medium">{email.email}</div>
-                          <div className="text-xs text-gray-500">{email.name}</div>
+                        <div className="flex items-center gap-2">
+                          <div>
+                            <div className="font-medium">{email.email}</div>
+                            <div className="text-xs text-gray-500">{email.name}</div>
+                          </div>
+                          {/* Period change badge */}
+                          {periodChange !== undefined && Math.abs(periodChange) > 10 && (
+                            <Badge 
+                              variant={hasSignificantDrop || hasWarningDrop ? "destructive" : "default"}
+                              className={`text-xs whitespace-nowrap ${hasImproved ? 'bg-green-600' : ''}`}
+                            >
+                              {periodChange > 0 ? '↑' : '↓'} {Math.abs(Math.round(periodChange))}% in {selectedTimePeriod}d
+                            </Badge>
+                          )}
                         </div>
                       </td>
                       <td className="p-4 text-center">
@@ -2053,6 +2076,32 @@ function EmailsPageContent() {
                                   {changeIcon}{Math.abs(Math.round(warmup.changes.warmup_score))}%
                                 </span>
                               )}
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="p-4 text-center">
+                        {(() => {
+                          if (periodChange === undefined) return <span className="text-xs text-gray-400">-</span>;
+                          const absChange = Math.abs(Math.round(periodChange));
+                          if (absChange < 5) return <span className="text-xs text-gray-500">—</span>;
+                          
+                          const isDropped = periodChange < -20;
+                          const isWarning = periodChange >= -20 && periodChange < -10;
+                          const isImproved = periodChange > 10;
+                          
+                          return (
+                            <div className={`flex flex-col items-center font-semibold ${
+                              isDropped ? 'text-red-600' :
+                              isWarning ? 'text-yellow-600' :
+                              isImproved ? 'text-green-600' :
+                              'text-gray-600'
+                            }`}>
+                              <span className="text-lg">
+                                {periodChange > 0 ? '↑' : '↓'} {absChange}%
+                              </span>
+                              {isDropped && <span className="text-xs">🔴 Big drop</span>}
+                              {isImproved && <span className="text-xs">📈 Improving</span>}
                             </div>
                           );
                         })()}
