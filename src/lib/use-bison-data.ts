@@ -74,13 +74,14 @@ function transformSenderEmail(bisonEmail: BisonSenderEmail): SenderEmail {
   // Calculate reply rate from totals if not provided
   let replyRate = bisonEmail.replyRate ?? 0;
   const totalSent = bisonEmail.totalSent || bisonEmail.emails_sent_count || 0;
-  if (!bisonEmail.replyRate && totalSent > 0) {
+  if (!bisonEmail.replyRate && totalSent > 0 && bisonEmail.totalReplies !== undefined) {
     replyRate = ((bisonEmail.totalReplies || 0) / totalSent) * 100;
   }
-  // If still no reply rate data, use a reasonable default based on warmup status
-  if (replyRate === 0 && totalSent > 0) {
-    // Assume ~2% average reply rate if we have no data
-    replyRate = 2.0;
+  // If we have no reply rate data, use a reasonable default
+  // - Emails that have sent volume are likely working fine (assume 2% healthy)
+  // - New emails with no volume get warning status (1.5%)
+  if (replyRate === 0) {
+    replyRate = totalSent > 0 ? 2.0 : 1.5;
   }
   
   // Always calculate health status from reply rate - don't use API's connection status field

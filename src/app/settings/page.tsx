@@ -16,6 +16,11 @@ interface ConnectionStatus {
   emailGuard: "untested" | "testing" | "connected" | "error";
 }
 
+interface ConnectionError {
+  bison: string | null;
+  emailGuard: string | null;
+}
+
 export default function SettingsPage() {
   const [config, setConfig] = useState<ApiKeyConfig>({
     bisonApiKey: "",
@@ -24,6 +29,10 @@ export default function SettingsPage() {
   const [status, setStatus] = useState<ConnectionStatus>({
     bison: "untested",
     emailGuard: "untested",
+  });
+  const [errors, setErrors] = useState<ConnectionError>({
+    bison: null,
+    emailGuard: null,
   });
   const [saved, setSaved] = useState(false);
   const [showBisonKey, setShowBisonKey] = useState(false);
@@ -54,69 +63,105 @@ export default function SettingsPage() {
   const testBisonConnection = async () => {
     if (!config.bisonApiKey) {
       setStatus(s => ({ ...s, bison: "error" }));
+      setErrors(e => ({ ...e, bison: "No API key provided" }));
       return;
     }
     
     setStatus(s => ({ ...s, bison: "testing" }));
+    setErrors(e => ({ ...e, bison: null }));
     
-    // Simulate API test - in production, this would hit the Bison API
     try {
-      // TODO: Replace with actual Bison API health check endpoint
-      // const response = await fetch('https://api.bison.example/health', {
-      //   headers: { 'Authorization': `Bearer ${config.bisonApiKey}` }
-      // });
+      // Call the real Bison API via our proxy
+      const response = await fetch('/api/bison?endpoint=sender-emails', {
+        method: 'GET',
+        headers: {
+          'X-Bison-Api-Key': config.bisonApiKey,
+        },
+      });
       
-      // Simulate network delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // For now, validate key format (non-empty, reasonable length)
-      if (config.bisonApiKey.length >= 10) {
-        setStatus(s => ({ ...s, bison: "connected" }));
-      } else {
-        setStatus(s => ({ ...s, bison: "error" }));
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.error || errorData.details || `HTTP ${response.status}`;
+        throw new Error(errorMessage);
       }
-    } catch {
+      
+      const data = await response.json();
+      
+      // Check for valid response structure
+      if (data.data !== undefined || data.meta !== undefined) {
+        setStatus(s => ({ ...s, bison: "connected" }));
+        setErrors(e => ({ ...e, bison: null }));
+      } else {
+        throw new Error("Invalid response structure from Bison API");
+      }
+    } catch (err) {
       setStatus(s => ({ ...s, bison: "error" }));
+      setErrors(e => ({ 
+        ...e, 
+        bison: err instanceof Error ? err.message : "Connection failed" 
+      }));
     }
   };
 
   const testEmailGuardConnection = async () => {
     if (!config.emailGuardApiKey) {
       setStatus(s => ({ ...s, emailGuard: "error" }));
+      setErrors(e => ({ ...e, emailGuard: "No API key provided" }));
       return;
     }
     
     setStatus(s => ({ ...s, emailGuard: "testing" }));
+    setErrors(e => ({ ...e, emailGuard: null }));
     
-    // Simulate API test - in production, this would hit the EmailGuard API
     try {
-      // TODO: Replace with actual EmailGuard API health check endpoint
-      // const response = await fetch('https://api.emailguard.example/health', {
-      //   headers: { 'Authorization': `Bearer ${config.emailGuardApiKey}` }
-      // });
+      // Call the real EmailGuard API via our proxy - do a simple SPF lookup
+      const response = await fetch('/api/emailguard', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-EmailGuard-Api-Key': config.emailGuardApiKey,
+        },
+        body: JSON.stringify({
+          action: 'spf-lookup',
+          domain: 'google.com', // Use a known domain for testing
+        }),
+      });
       
-      // Simulate network delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // For now, validate key format (non-empty, reasonable length)
-      if (config.emailGuardApiKey.length >= 10) {
-        setStatus(s => ({ ...s, emailGuard: "connected" }));
-      } else {
-        setStatus(s => ({ ...s, emailGuard: "error" }));
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.error || errorData.details || `HTTP ${response.status}`;
+        throw new Error(errorMessage);
       }
-    } catch {
+      
+      // If we get here, the API key is valid
+      setStatus(s => ({ ...s, emailGuard: "connected" }));
+      setErrors(e => ({ ...e, emailGuard: null }));
+    } catch (err) {
       setStatus(s => ({ ...s, emailGuard: "error" }));
+      setErrors(e => ({ 
+        ...e, 
+        emailGuard: err instanceof Error ? err.message : "Connection failed" 
+      }));
     }
   };
 
-  const getStatusBadge = (connectionStatus: ConnectionStatus["bison"]) => {
+  const getStatusBadge = (connectionStatus: ConnectionStatus["bison"], errorMessage?: string | null) => {
     switch (connectionStatus) {
       case "connected":
         return <Badge className="bg-green-100 text-green-800">Connected</Badge>;
       case "testing":
         return <Badge className="bg-blue-100 text-blue-800">Testing...</Badge>;
       case "error":
-        return <Badge variant="destructive">Error</Badge>;
+        return (
+          <div className="flex flex-col items-end gap-1">
+            <Badge variant="destructive">Error</Badge>
+            {errorMessage && (
+              <span className="text-xs text-red-600 max-w-[200px] text-right truncate" title={errorMessage}>
+                {errorMessage}
+              </span>
+            )}
+          </div>
+        );
       default:
         return <Badge className="bg-gray-100 text-gray-600">Not Tested</Badge>;
     }
@@ -135,7 +180,7 @@ export default function SettingsPage() {
           <CardHeader className="pb-2 lg:pb-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <CardTitle className="text-base lg:text-lg">Bison API Key</CardTitle>
-              {getStatusBadge(status.bison)}
+              {getStatusBadge(status.bison, errors.bison)}
             </div>
             <p className="text-xs lg:text-sm text-gray-500 mt-1">
               Connect to LeadGenJay/Bison for email sender data and metrics
@@ -175,7 +220,7 @@ export default function SettingsPage() {
           <CardHeader className="pb-2 lg:pb-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <CardTitle className="text-base lg:text-lg">EmailGuard API Key</CardTitle>
-              {getStatusBadge(status.emailGuard)}
+              {getStatusBadge(status.emailGuard, errors.emailGuard)}
             </div>
             <p className="text-xs lg:text-sm text-gray-500 mt-1">
               Connect to EmailGuard for domain health monitoring and blacklist checks
