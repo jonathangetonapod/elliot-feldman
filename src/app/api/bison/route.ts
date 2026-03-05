@@ -5,9 +5,47 @@ import { NextRequest, NextResponse } from 'next/server';
  * 
  * Proxies requests to the Bison/LeadGenJay API to avoid CORS issues.
  * The API key should be set in the BISON_API_KEY environment variable.
+ * 
+ * For sender-emails endpoint, automatically fetches ALL pages.
  */
 
 const BISON_BASE_URL = 'https://send.leadgenjay.com/api';
+
+// Fetch all pages of sender emails
+async function fetchAllSenderEmails(apiKey: string): Promise<{ data: any[], meta: any }> {
+  const allEmails: any[] = [];
+  let page = 1;
+  let lastPage = 1;
+  
+  do {
+    const response = await fetch(`${BISON_BASE_URL}/sender-emails?page=${page}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Accept': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Bison API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    allEmails.push(...(data.data || []));
+    lastPage = data.meta?.last_page || 1;
+    page++;
+  } while (page <= lastPage);
+  
+  return {
+    data: allEmails,
+    meta: {
+      total: allEmails.length,
+      current_page: 1,
+      last_page: 1,
+      per_page: allEmails.length,
+    }
+  };
+}
 
 export async function GET(request: NextRequest) {
   // Check for API key from header first (client-provided), then fall back to env var
@@ -31,17 +69,23 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Build the Bison API URL
-  const bisonUrl = new URL(`${BISON_BASE_URL}/${endpoint}`);
-
-  // Forward query parameters (except 'endpoint')
-  searchParams.forEach((value, key) => {
-    if (key !== 'endpoint') {
-      bisonUrl.searchParams.append(key, value);
-    }
-  });
-
   try {
+    // Special handling for sender-emails: fetch ALL pages
+    if (endpoint === 'sender-emails') {
+      const data = await fetchAllSenderEmails(apiKey);
+      return NextResponse.json(data);
+    }
+
+    // Build the Bison API URL for other endpoints
+    const bisonUrl = new URL(`${BISON_BASE_URL}/${endpoint}`);
+
+    // Forward query parameters (except 'endpoint')
+    searchParams.forEach((value, key) => {
+      if (key !== 'endpoint') {
+        bisonUrl.searchParams.append(key, value);
+      }
+    });
+
     const response = await fetch(bisonUrl.toString(), {
       method: 'GET',
       headers: {
