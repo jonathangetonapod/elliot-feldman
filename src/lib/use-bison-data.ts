@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { DashboardStats, SenderEmail, DomainHealth, EmailStatus } from './mock-data';
 
 // Types for Bison API responses
@@ -36,23 +36,81 @@ interface BisonSenderEmail {
   total_replied_count?: number;
 }
 
+interface BisonCampaign {
+  id: number;
+  uuid: string;
+  name: string;
+  status: string;
+  emails_sent?: number;
+  opened?: number;
+  unique_replies?: number;
+  bounced?: number;
+}
+
 interface BisonWorkspaceStats {
-  totalSenderEmails?: number;
-  totalDomains?: number;
-  avgReplyRate?: number;
-  totalSent?: number;
-  totalReplies?: number;
-  // May have other fields
+  emails_sent?: number;
+  total_leads_contacted?: number;
+  opened?: number;
+  opened_percentage?: number;
+  unique_replies_per_contact?: number;
+  unique_replies_per_contact_percentage?: number;
+  bounced?: number;
+  bounced_percentage?: number;
 }
 
 export interface BisonDataState {
   stats: DashboardStats | null;
   emails: SenderEmail[];
   domains: DomainHealth[];
+  campaigns: BisonCampaign[];
+  workspaceStats: BisonWorkspaceStats | null;
   loading: boolean;
+  emailsLoading: boolean;
+  campaignsLoading: boolean;
+  statsLoading: boolean;
   error: string | null;
   connected: boolean;
   lastFetched: Date | null;
+}
+
+// Cache for stale-while-revalidate pattern
+const CACHE_KEY = 'elliot-feldman-bison-cache';
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+interface CacheData {
+  emails: SenderEmail[];
+  domains: DomainHealth[];
+  stats: DashboardStats;
+  campaigns: BisonCampaign[];
+  workspaceStats: BisonWorkspaceStats | null;
+  timestamp: number;
+}
+
+function getCache(): CacheData | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (!cached) return null;
+    const data = JSON.parse(cached) as CacheData;
+    // Return cache even if stale - we'll refresh in background
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function setCache(data: Omit<CacheData, 'timestamp'>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const cacheData: CacheData = { ...data, timestamp: Date.now() };
+    localStorage.setItem(CACHE_KEY, JSON.stringify(cacheData));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function isCacheStale(cache: CacheData): boolean {
+  return Date.now() - cache.timestamp > CACHE_TTL;
 }
 
 // Determine email health status based on reply rate
@@ -116,7 +174,7 @@ function transformSenderEmail(bisonEmail: BisonSenderEmail): SenderEmail {
   };
 }
 
-// Calculate domain health from emails
+// Calculate domain health from emails - memoizable pure function
 function calculateDomainHealth(emails: SenderEmail[]): DomainHealth[] {
   const domainMap = new Map<string, SenderEmail[]>();
   
@@ -155,7 +213,7 @@ function calculateDomainHealth(emails: SenderEmail[]): DomainHealth[] {
   });
 }
 
-// Calculate dashboard stats from emails
+// Calculate dashboard stats from emails - memoizable pure function
 function calculateDashboardStats(emails: SenderEmail[], domains: DomainHealth[]): DashboardStats {
   const healthyEmails = emails.filter(e => e.status === 'healthy').length;
   const warningEmails = emails.filter(e => e.status === 'warning').length;
@@ -198,70 +256,180 @@ export function getApiKeyFromStorage(): string | null {
   }
 }
 
+// Parallel fetch helper with error handling
+async function fetchWithFallback<T>(
+  url: string,
+  fallback: T
+): Promise<{ data: T; error: string | null }> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return { data: fallback, error: errorData.error || `API error: ${response.status}` };
+    }
+    const data = await response.json();
+    return { data, error: null };
+  } catch (err) {
+    return { data: fallback, error: err instanceof Error ? err.message : 'Fetch failed' };
+  }
+}
+
 export function useBisonData(): BisonDataState & { refetch: () => Promise<void> } {
-  const [state, setState] = useState<BisonDataState>({
-    stats: null,
-    emails: [],
-    domains: [],
-    loading: true,
-    error: null,
-    connected: false,
-    lastFetched: null,
+  const [state, setState] = useState<BisonDataState>(() => {
+    // Initialize with cached data if available (stale-while-revalidate)
+    const cache = getCache();
+    if (cache) {
+      return {
+        stats: cache.stats,
+        emails: cache.emails,
+        domains: cache.domains,
+        campaigns: cache.campaigns || [],
+        workspaceStats: cache.workspaceStats || null,
+        loading: isCacheStale(cache), // Only show loading if cache is stale
+        emailsLoading: isCacheStale(cache),
+        campaignsLoading: isCacheStale(cache),
+        statsLoading: isCacheStale(cache),
+        error: null,
+        connected: true,
+        lastFetched: new Date(cache.timestamp),
+      };
+    }
+    return {
+      stats: null,
+      emails: [],
+      domains: [],
+      campaigns: [],
+      workspaceStats: null,
+      loading: true,
+      emailsLoading: true,
+      campaignsLoading: true,
+      statsLoading: true,
+      error: null,
+      connected: false,
+      lastFetched: null,
+    };
   });
+  
+  // Track if fetch is in progress to prevent duplicate calls
+  const fetchInProgressRef = useRef(false);
 
   const fetchData = useCallback(async () => {
-    setState(prev => ({ ...prev, loading: true, error: null }));
+    // Prevent duplicate fetches
+    if (fetchInProgressRef.current) return;
+    fetchInProgressRef.current = true;
+
+    // Only show loading spinners if we don't have cached data
+    const hasCache = state.emails.length > 0;
+    if (!hasCache) {
+      setState(prev => ({ 
+        ...prev, 
+        loading: true, 
+        emailsLoading: true,
+        campaignsLoading: true,
+        statsLoading: true,
+        error: null 
+      }));
+    }
 
     try {
-      // Fetch sender emails from Bison API
-      const emailsResponse = await fetch('/api/bison?endpoint=sender-emails');
-      
-      if (!emailsResponse.ok) {
-        const errorData = await emailsResponse.json().catch(() => ({}));
-        throw new Error(errorData.error || `API error: ${emailsResponse.status}`);
-      }
+      // Get date range for workspace stats (last 30 days)
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - 30);
+      const formatDate = (d: Date) => d.toISOString().split('T')[0];
 
-      const emailsData = await emailsResponse.json();
+      // PARALLEL FETCH: Fetch all endpoints simultaneously
+      const [emailsResult, campaignsResult, workspaceStatsResult] = await Promise.all([
+        // Fetch sender emails (uses parallel pagination internally)
+        fetchWithFallback<{ data?: BisonSenderEmail[] }>(
+          '/api/bison?endpoint=sender-emails',
+          { data: [] }
+        ),
+        // Fetch campaigns
+        fetchWithFallback<{ data?: BisonCampaign[] }>(
+          '/api/bison?endpoint=campaigns',
+          { data: [] }
+        ),
+        // Fetch workspace stats
+        fetchWithFallback<{ data?: BisonWorkspaceStats }>(
+          `/api/bison?endpoint=workspaces/v1.1/stats&start_date=${formatDate(startDate)}&end_date=${formatDate(endDate)}`,
+          { data: undefined }
+        ),
+      ]);
+
+      // Process emails first (critical path)
+      const rawEmails: BisonSenderEmail[] = Array.isArray(emailsResult.data)
+        ? emailsResult.data
+        : emailsResult.data?.data || [];
       
-      // Handle different response formats
-      const rawEmails: BisonSenderEmail[] = Array.isArray(emailsData) 
-        ? emailsData 
-        : emailsData.data || emailsData.senderEmails || emailsData.emails || [];
-      
-      // Transform to our format
       const emails = rawEmails.map(transformSenderEmail);
-      
-      // Calculate domain health from emails
       const domains = calculateDomainHealth(emails);
-      
-      // Calculate dashboard stats
       const stats = calculateDashboardStats(emails, domains);
-
-      setState({
+      
+      // Update state with emails immediately
+      setState(prev => ({
+        ...prev,
         stats,
         emails,
         domains,
+        emailsLoading: false,
         loading: false,
-        error: null,
-        connected: true,
+        error: emailsResult.error,
+        connected: !emailsResult.error,
         lastFetched: new Date(),
+      }));
+
+      // Process campaigns
+      const campaigns: BisonCampaign[] = Array.isArray(campaignsResult.data)
+        ? campaignsResult.data
+        : campaignsResult.data?.data || [];
+
+      setState(prev => ({
+        ...prev,
+        campaigns,
+        campaignsLoading: false,
+      }));
+
+      // Process workspace stats
+      const workspaceStats = workspaceStatsResult.data?.data || null;
+
+      setState(prev => ({
+        ...prev,
+        workspaceStats,
+        statsLoading: false,
+      }));
+
+      // Update cache
+      setCache({
+        emails,
+        domains,
+        stats,
+        campaigns,
+        workspaceStats,
       });
+
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch data';
       setState(prev => ({
         ...prev,
         loading: false,
+        emailsLoading: false,
+        campaignsLoading: false,
+        statsLoading: false,
         error: errorMessage,
         connected: false,
       }));
+    } finally {
+      fetchInProgressRef.current = false;
     }
-  }, []);
+  }, [state.emails.length]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  return { ...state, refetch: fetchData };
+  // Memoize the return value to prevent unnecessary re-renders
+  return useMemo(() => ({ ...state, refetch: fetchData }), [state, fetchData]);
 }
 
 // Hook to check if we should use real data
@@ -275,4 +443,20 @@ export function useHasApiKey(): boolean {
   }, []);
 
   return hasKey;
+}
+
+// Separate hooks for individual data sections (for Suspense boundaries)
+export function useBisonEmails() {
+  const { emails, emailsLoading, error, refetch } = useBisonData();
+  return { emails, loading: emailsLoading, error, refetch };
+}
+
+export function useBisonCampaigns() {
+  const { campaigns, campaignsLoading, error, refetch } = useBisonData();
+  return { campaigns, loading: campaignsLoading, error, refetch };
+}
+
+export function useBisonStats() {
+  const { stats, statsLoading, error, refetch } = useBisonData();
+  return { stats, loading: statsLoading, error, refetch };
 }

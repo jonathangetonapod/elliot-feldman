@@ -122,39 +122,18 @@ export interface SenderReplyStats {
 }
 
 /**
- * Fetch all sender emails with automatic pagination
- * Bison API returns 15 results per page
+ * Fetch all sender emails
+ * Now uses the server-side parallel pagination (API already handles this)
  */
 export async function fetchSenderEmails(): Promise<SenderEmail[]> {
-  const allEmails: SenderEmail[] = [];
-  let page = 1;
-  const maxPages = 50; // Safety limit
-
-  while (page <= maxPages) {
-    const response = await fetch(`${PROXY_BASE}?endpoint=sender-emails&page=${page}`);
-    
-    if (!response.ok) {
-      throw new Error(`Failed to fetch sender emails: ${response.statusText}`);
-    }
-
-    const result: SenderEmailsResponse = await response.json();
-    const emails = result.data || [];
-
-    if (emails.length === 0) {
-      break;
-    }
-
-    allEmails.push(...emails);
-
-    // If we got less than 15 results, we're on the last page
-    if (emails.length < 15) {
-      break;
-    }
-
-    page++;
+  const response = await fetch(`${PROXY_BASE}?endpoint=sender-emails`);
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch sender emails: ${response.statusText}`);
   }
 
-  return allEmails;
+  const result: SenderEmailsResponse = await response.json();
+  return result.data || [];
 }
 
 /**
@@ -211,29 +190,64 @@ export async function fetchWorkspaceStats(
 }
 
 /**
- * Fetch all campaigns with optional filters
+ * Fetch all campaigns with optional filters and PARALLEL pagination
  */
 export async function fetchCampaigns(options?: {
   status?: string;
   search?: string;
 }): Promise<Campaign[]> {
-  const params = new URLSearchParams({ endpoint: 'campaigns' });
-  
-  if (options?.status) {
-    params.append('status', options.status);
-  }
-  if (options?.search) {
-    params.append('search', options.search);
+  const buildParams = (page: number) => {
+    const params = new URLSearchParams({ 
+      endpoint: 'campaigns',
+      page: page.toString(),
+    });
+    if (options?.status) {
+      params.append('status', options.status);
+    }
+    if (options?.search) {
+      params.append('search', options.search);
+    }
+    return params;
+  };
+
+  // First, get page 1 to know total pages
+  const firstResponse = await fetch(`${PROXY_BASE}?${buildParams(1)}`);
+  if (!firstResponse.ok) {
+    throw new Error(`Failed to fetch campaigns: ${firstResponse.statusText}`);
   }
 
-  const response = await fetch(`${PROXY_BASE}?${params}`);
+  const firstResult: CampaignsResponse = await firstResponse.json();
+  const allCampaigns: Campaign[] = [...(firstResult.data || [])];
   
-  if (!response.ok) {
-    throw new Error(`Failed to fetch campaigns: ${response.statusText}`);
+  const totalPages = firstResult.meta?.last_page || 1;
+  if (totalPages <= 1) {
+    return allCampaigns;
   }
-
-  const result: CampaignsResponse = await response.json();
-  return result.data || [];
+  
+  // Fetch remaining pages in parallel
+  const remainingPages = Array.from({ length: Math.min(totalPages - 1, 49) }, (_, i) => i + 2);
+  const BATCH_SIZE = 5;
+  
+  for (let i = 0; i < remainingPages.length; i += BATCH_SIZE) {
+    const batch = remainingPages.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(
+      batch.map(async page => {
+        try {
+          const response = await fetch(`${PROXY_BASE}?${buildParams(page)}`);
+          if (!response.ok) return { data: [] };
+          return response.json() as Promise<CampaignsResponse>;
+        } catch {
+          return { data: [] };
+        }
+      })
+    );
+    
+    for (const result of batchResults) {
+      allCampaigns.push(...(result.data || []));
+    }
+  }
+  
+  return allCampaigns;
 }
 
 /**
@@ -270,53 +284,59 @@ export async function fetchCampaignStats(): Promise<{
 }
 
 /**
- * Fetch all replies with pagination
+ * Fetch all replies with PARALLEL pagination
  */
 export async function fetchReplies(options?: {
   status?: string;
   folder?: string;
 }): Promise<Reply[]> {
-  const allReplies: Reply[] = [];
-  let page = 1;
-  const maxPages = 50;
-
-  while (page <= maxPages) {
+  const buildParams = (page: number) => {
     const params = new URLSearchParams({
       endpoint: 'replies',
       page: page.toString(),
       folder: options?.folder || 'all',
     });
-    
     if (options?.status) {
       params.append('status', options.status);
     }
+    return params;
+  };
 
-    const response = await fetch(`${PROXY_BASE}?${params}`);
+  // First, get page 1 to know total pages
+  const firstResponse = await fetch(`${PROXY_BASE}?${buildParams(1)}`);
+  if (!firstResponse.ok) {
+    throw new Error(`Failed to fetch replies: ${firstResponse.statusText}`);
+  }
+  
+  const firstResult: RepliesResponse = await firstResponse.json();
+  const allReplies: Reply[] = [...(firstResult.data || [])];
+  
+  const totalPages = firstResult.meta?.last_page || 1;
+  if (totalPages <= 1) {
+    return allReplies;
+  }
+  
+  // Fetch remaining pages in parallel
+  const remainingPages = Array.from({ length: Math.min(totalPages - 1, 49) }, (_, i) => i + 2);
+  const BATCH_SIZE = 5; // Fetch 5 pages at once
+  
+  for (let i = 0; i < remainingPages.length; i += BATCH_SIZE) {
+    const batch = remainingPages.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(
+      batch.map(async page => {
+        try {
+          const response = await fetch(`${PROXY_BASE}?${buildParams(page)}`);
+          if (!response.ok) return { data: [] };
+          return response.json() as Promise<RepliesResponse>;
+        } catch {
+          return { data: [] };
+        }
+      })
+    );
     
-    if (!response.ok) {
-      throw new Error(`Failed to fetch replies: ${response.statusText}`);
+    for (const result of batchResults) {
+      allReplies.push(...(result.data || []));
     }
-
-    const result: RepliesResponse = await response.json();
-    const replies = result.data || [];
-
-    if (replies.length === 0) {
-      break;
-    }
-
-    allReplies.push(...replies);
-
-    // Check pagination meta if available
-    if (result.meta && result.meta.current_page >= result.meta.last_page) {
-      break;
-    }
-
-    // If we got less than 15 results, we're on the last page
-    if (replies.length < 15) {
-      break;
-    }
-
-    page++;
   }
 
   return allReplies;

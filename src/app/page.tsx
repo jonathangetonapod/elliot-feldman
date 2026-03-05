@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { getMockDashboardStats, getMockDomainHealth, generateMockEmails } from "@/lib/mock-data";
 import { useBisonData } from "@/lib/use-bison-data";
 import { Recommendations } from "@/components/recommendations";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, Suspense, memo } from "react";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import {
   takeSnapshot,
@@ -84,6 +84,55 @@ function ProgressBar({ value, max, color = "bg-blue-500" }: { value: number; max
   );
 }
 
+// Loading skeleton components for progressive loading
+function StatCardSkeleton() {
+  return (
+    <Card>
+      <CardContent className="p-4 lg:p-6 animate-pulse">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="w-8 h-8 bg-gray-200 rounded"></div>
+          <div className="h-4 bg-gray-200 rounded w-20"></div>
+        </div>
+        <div className="h-8 bg-gray-200 rounded w-16 mb-2"></div>
+        <div className="h-3 bg-gray-100 rounded w-24"></div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ChartSkeleton({ title }: { title: string }) {
+  return (
+    <Card className="hover:shadow-lg transition-shadow">
+      <CardHeader className="pb-2 px-3 lg:px-6">
+        <CardTitle className="text-sm lg:text-lg">{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="px-3 lg:px-6">
+        <div className="h-48 lg:h-64 flex items-center justify-center">
+          <div className="animate-pulse flex flex-col items-center gap-2">
+            <div className="w-24 h-24 bg-gray-200 rounded-full"></div>
+            <div className="h-4 bg-gray-200 rounded w-32"></div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SectionSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <Card>
+      <CardContent className="p-4 lg:p-6 animate-pulse">
+        <div className="h-6 bg-gray-200 rounded w-40 mb-4"></div>
+        <div className="space-y-3">
+          {Array.from({ length: rows }).map((_, i) => (
+            <div key={i} className="h-12 bg-gray-100 rounded-lg"></div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // Chart colors
 const COLORS = {
   critical: "#ef4444",
@@ -156,49 +205,68 @@ export default function Dashboard() {
     return 'stable' as const;
   }, [overallTrend]);
   
+  // Memoize expensive calculations to prevent re-computation on every render
+  
   // Get recent issues (burned + warning emails)
-  const recentIssues = emails
-    .filter(e => e.status !== 'healthy')
-    .slice(0, 5);
+  const recentIssues = useMemo(() => 
+    emails.filter(e => e.status !== 'healthy').slice(0, 5),
+    [emails]
+  );
   
   // Get flagged domains
-  const flaggedDomains = domains
-    .filter(d => d.blacklistStatus === 'listed' || d.spamScore > 5)
-    .slice(0, 5);
+  const flaggedDomains = useMemo(() => 
+    domains.filter(d => d.blacklistStatus === 'listed' || d.spamScore > 5).slice(0, 5),
+    [domains]
+  );
     
   // Calculate warmup completion percentage
-  const warmupCompletion = stats.totalEmails > 0 
-    ? Math.round((stats.readyEmails / stats.totalEmails) * 100) 
-    : 0;
+  const warmupCompletion = useMemo(() => 
+    stats.totalEmails > 0 ? Math.round((stats.readyEmails / stats.totalEmails) * 100) : 0,
+    [stats.totalEmails, stats.readyEmails]
+  );
     
   // Accounts needing attention
-  const accountsNeedingAttention = stats.warningEmails + stats.burnedEmails;
+  const accountsNeedingAttention = useMemo(() => 
+    stats.warningEmails + stats.burnedEmails,
+    [stats.warningEmails, stats.burnedEmails]
+  );
   
   // Reply rate color
-  const replyRateColors = getReplyRateColor(stats.avgReplyRate);
+  const replyRateColors = useMemo(() => 
+    getReplyRateColor(stats.avgReplyRate),
+    [stats.avgReplyRate]
+  );
 
-  // Calculate chart data
-  const criticalAccounts = emails.filter(e => e.replyRate < 1);
-  const warningAccounts = emails.filter(e => e.replyRate >= 1 && e.replyRate <= 2);
-  const healthyAccounts = emails.filter(e => e.replyRate > 2);
+  // Calculate chart data - all memoized for performance
+  const { criticalAccounts, warningAccounts, healthyAccounts } = useMemo(() => ({
+    criticalAccounts: emails.filter(e => e.replyRate < 1),
+    warningAccounts: emails.filter(e => e.replyRate >= 1 && e.replyRate <= 2),
+    healthyAccounts: emails.filter(e => e.replyRate > 2),
+  }), [emails]);
 
   // Pie chart data for reply rate distribution
-  const replyRateDistributionData = [
+  const replyRateDistributionData = useMemo(() => [
     { name: "Critical (<1%)", value: criticalAccounts.length, color: COLORS.critical },
     { name: "Warning (1-2%)", value: warningAccounts.length, color: COLORS.warning },
     { name: "Healthy (>2%)", value: healthyAccounts.length, color: COLORS.healthy },
-  ].filter(item => item.value > 0);
+  ].filter(item => item.value > 0), [criticalAccounts.length, warningAccounts.length, healthyAccounts.length]);
 
   // Donut chart data for warmup status
-  const warmupOn = emails.filter(e => e.warmupStatus === 'warming');
-  const warmupOff = emails.filter(e => e.warmupStatus !== 'warming');
-  const warmupStatusData = [
-    { name: "Warmup ON", value: warmupOn.length, color: COLORS.warmupOn },
-    { name: "Warmup OFF", value: warmupOff.length, color: COLORS.warmupOff },
-  ].filter(item => item.value > 0);
+  const { warmupOn, warmupOff, warmupStatusData } = useMemo(() => {
+    const warmupOn = emails.filter(e => e.warmupStatus === 'warming');
+    const warmupOff = emails.filter(e => e.warmupStatus !== 'warming');
+    return {
+      warmupOn,
+      warmupOff,
+      warmupStatusData: [
+        { name: "Warmup ON", value: warmupOn.length, color: COLORS.warmupOn },
+        { name: "Warmup OFF", value: warmupOff.length, color: COLORS.warmupOff },
+      ].filter(item => item.value > 0),
+    };
+  }, [emails]);
 
   // Bar chart data for top 10 accounts by reply rate
-  const top10ByReplyRate = [...emails]
+  const top10ByReplyRate = useMemo(() => [...emails]
     .filter(e => e.sentLast7Days > 0)
     .sort((a, b) => b.replyRate - a.replyRate)
     .slice(0, 10)
@@ -206,10 +274,10 @@ export default function Dashboard() {
       name: e.email.split('@')[0].slice(0, 10),
       replyRate: e.replyRate,
       fill: e.replyRate > 2 ? COLORS.healthy : e.replyRate >= 1 ? COLORS.warning : COLORS.critical,
-    }));
+    })), [emails]);
 
   // Bottom 10 accounts (worst performing)
-  const bottom10ByReplyRate = [...emails]
+  const bottom10ByReplyRate = useMemo(() => [...emails]
     .filter(e => e.sentLast7Days > 0)
     .sort((a, b) => a.replyRate - b.replyRate)
     .slice(0, 10)
@@ -217,7 +285,7 @@ export default function Dashboard() {
       name: e.email.split('@')[0].slice(0, 10),
       replyRate: e.replyRate,
       fill: e.replyRate > 2 ? COLORS.healthy : e.replyRate >= 1 ? COLORS.warning : COLORS.critical,
-    }));
+    })), [emails]);
 
   return (
     <div className="p-4 lg:p-8">
@@ -244,10 +312,15 @@ export default function Dashboard() {
                 </button>
               )}
             </div>
-            {loading ? (
+            {loading && emails.length === 0 ? (
               <Badge variant="outline" className="text-xs">
                 <span className="inline-block w-2 h-2 bg-yellow-500 rounded-full mr-1.5 animate-pulse"></span>
                 Loading...
+              </Badge>
+            ) : loading && emails.length > 0 ? (
+              <Badge variant="outline" className="text-xs border-blue-200 text-blue-700">
+                <span className="inline-block w-2 h-2 bg-blue-500 rounded-full mr-1.5 animate-pulse"></span>
+                Refreshing...
               </Badge>
             ) : connected && !error ? (
               <Badge variant="outline" className="text-xs border-green-200 text-green-700">
@@ -264,25 +337,15 @@ export default function Dashboard() {
         </div>
       </div>
       
-      {/* Loading Skeleton */}
-      {loading && (
+      {/* Stats Grid - Show immediately with cached data or loading skeletons */}
+      {loading && emails.length === 0 ? (
+        // Full loading state only when no cached data
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 mb-6 lg:mb-8">
           {[1, 2, 3, 4].map((i) => (
-            <Card key={i}>
-              <CardHeader className="pb-1 lg:pb-2 px-3 lg:px-6 pt-3 lg:pt-6">
-                <div className="h-4 bg-gray-200 rounded animate-pulse w-20"></div>
-              </CardHeader>
-              <CardContent className="px-3 lg:px-6 pb-3 lg:pb-6">
-                <div className="h-8 bg-gray-200 rounded animate-pulse w-16 mb-2"></div>
-                <div className="h-4 bg-gray-100 rounded animate-pulse w-24"></div>
-              </CardContent>
-            </Card>
+            <StatCardSkeleton key={i} />
           ))}
         </div>
-      )}
-      
-      {/* Stats Grid - Show when not loading */}
-      {!loading && (
+      ) : (
         <>
           {/* Big Numbers Section */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 mb-6 lg:mb-8">

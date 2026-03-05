@@ -8,10 +8,34 @@ import { NextRequest, NextResponse } from 'next/server';
  * 
  * For sender-emails endpoint, automatically fetches ALL pages in PARALLEL.
  * Bison allows 3000 requests/min, so we can be aggressive.
+ * 
+ * Caching Strategy:
+ * - sender-emails: Cache for 60s (data changes infrequently)
+ * - campaigns: Cache for 60s
+ * - workspace stats: Cache for 120s
+ * - Use stale-while-revalidate for better UX
  */
 
 const BISON_BASE_URL = 'https://send.leadgenjay.com/api';
 const PARALLEL_BATCH_SIZE = 10; // Fetch 10 pages at once
+
+// Cache durations by endpoint (in seconds)
+const CACHE_DURATIONS: Record<string, { maxAge: number; staleWhileRevalidate: number }> = {
+  'sender-emails': { maxAge: 60, staleWhileRevalidate: 120 },
+  'campaigns': { maxAge: 60, staleWhileRevalidate: 120 },
+  'workspaces': { maxAge: 120, staleWhileRevalidate: 300 },
+  'default': { maxAge: 30, staleWhileRevalidate: 60 },
+};
+
+function getCacheHeaders(endpoint: string): Record<string, string> {
+  // Find matching cache config
+  const key = Object.keys(CACHE_DURATIONS).find(k => endpoint.startsWith(k)) || 'default';
+  const config = CACHE_DURATIONS[key];
+  
+  return {
+    'Cache-Control': `public, max-age=${config.maxAge}, stale-while-revalidate=${config.staleWhileRevalidate}`,
+  };
+}
 
 // Fetch a single page of sender emails
 async function fetchPage(apiKey: string, page: number): Promise<{ data: any[], meta: any }> {
@@ -106,7 +130,10 @@ export async function GET(request: NextRequest) {
       const data = await fetchAllSenderEmails(apiKey);
       const duration = Date.now() - startTime;
       console.log(`Fetched ${data.data.length} sender emails in ${duration}ms`);
-      return NextResponse.json(data);
+      
+      return NextResponse.json(data, {
+        headers: getCacheHeaders(endpoint),
+      });
     }
 
     // Build the Bison API URL for other endpoints
@@ -137,7 +164,9 @@ export async function GET(request: NextRequest) {
     }
 
     const data = await response.json();
-    return NextResponse.json(data);
+    return NextResponse.json(data, {
+      headers: getCacheHeaders(endpoint),
+    });
   } catch (error) {
     console.error('Bison API proxy error:', error);
     return NextResponse.json(
