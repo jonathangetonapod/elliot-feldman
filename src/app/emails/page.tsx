@@ -575,6 +575,9 @@ function EmailsPageContent() {
   const [warmupPeriod, setWarmupPeriod] = useState<WarmupPeriodType>('7vs14');
   const [warmupLoading, setWarmupLoading] = useState(false);
   const [warmupSummary, setWarmupSummary] = useState<ReturnType<typeof getWarmupHealthSummary> | null>(null);
+  
+  // Simple time period state for historical comparison
+  const [selectedTimePeriod, setSelectedTimePeriod] = useState<7 | 14 | 30>(7);
 
   const pageSize = 25;
 
@@ -650,7 +653,13 @@ function EmailsPageContent() {
     async function fetchWarmup() {
       setWarmupLoading(true);
       try {
-        const response = await fetchWarmupStats(warmupPeriod, true);
+        // Map selectedTimePeriod to warmup period type
+        const periodMap: Record<7 | 14 | 30, WarmupPeriodType> = {
+          7: '7vs14',
+          14: '14vs14',
+          30: '30vs30',
+        };
+        const response = await fetchWarmupStats(periodMap[selectedTimePeriod], true);
         
         if (response.data) {
           // Create map for quick lookup by email
@@ -673,7 +682,7 @@ function EmailsPageContent() {
     }
     
     fetchWarmup();
-  }, [warmupPeriod]);
+  }, [selectedTimePeriod]);
 
   // Take snapshot for history tracking when emails load
   useEffect(() => {
@@ -709,6 +718,58 @@ function EmailsPageContent() {
     setAtRiskAccounts(predictAtRiskAccounts(7));
     setRecentlyDegraded(getRecentlyDegraded(7));
   }, [loading, apiEmails]);
+
+  // Calculate dropped accounts for selected time period
+  const droppedAccountsData = useMemo(() => {
+    const allAccounts = Array.from(warmupStatsMap.values());
+    
+    // Filter accounts with baseline data (can compare)
+    const comparableAccounts = allAccounts.filter(a => a.baseline !== null);
+    
+    // Calculate percent change in warmup score
+    const withChanges = comparableAccounts.map(account => {
+      const change = account.changes.warmup_score;
+      const fromScore = account.baseline?.warmup_score ?? 0;
+      const toScore = account.current.warmup_score;
+      return {
+        ...account,
+        fromScore,
+        toScore,
+        percentChange: change,
+      };
+    });
+    
+    // Significantly dropped (>20% drop)
+    const dropped = withChanges
+      .filter(a => a.percentChange < -20)
+      .sort((a, b) => a.percentChange - b.percentChange); // Most dropped first
+    
+    // Warning (10-20% drop)
+    const warning = withChanges.filter(a => a.percentChange >= -20 && a.percentChange < -10);
+    
+    // Stable (within ±10%)
+    const stable = withChanges.filter(a => a.percentChange >= -10 && a.percentChange <= 10);
+    
+    // Improved (>10% up)
+    const improved = withChanges
+      .filter(a => a.percentChange > 10)
+      .sort((a, b) => b.percentChange - a.percentChange); // Most improved first
+    
+    // Calculate average change
+    const avgChange = withChanges.length > 0
+      ? Math.round(withChanges.reduce((sum, a) => sum + a.percentChange, 0) / withChanges.length * 10) / 10
+      : 0;
+    
+    return {
+      dropped,
+      warning,
+      stable,
+      improved,
+      total: comparableAccounts.length,
+      newAccounts: allAccounts.length - comparableAccounts.length,
+      avgChange,
+    };
+  }, [warmupStatsMap]);
 
   // Calculate stats for the summary bar - now trend-based
   const summaryStats = useMemo(() => {
@@ -1402,39 +1463,173 @@ function EmailsPageContent() {
         </div>
       )}
 
-      {/* Time Period Selector */}
-      <Card className="mb-4">
-        <CardContent className="pt-4 px-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-600">📅 Comparison Period:</span>
+      {/* Time Period Selector - Prominent placement */}
+      <Card className="mb-6 border-2 border-indigo-200 bg-gradient-to-r from-indigo-50 to-white">
+        <CardContent className="pt-4 px-4 pb-4">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">📅</span>
+              <div>
+                <div className="text-sm font-semibold text-gray-800">Historical Comparison</div>
+                <div className="text-xs text-gray-500">Compare performance to previous period</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
               <select
-                className="px-3 py-1.5 border rounded-md text-sm bg-white"
-                value={warmupPeriod}
-                onChange={(e) => setWarmupPeriod(e.target.value as WarmupPeriodType)}
+                className="px-4 py-2.5 border-2 border-indigo-300 rounded-lg text-sm bg-white font-medium text-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                value={selectedTimePeriod}
+                onChange={(e) => setSelectedTimePeriod(Number(e.target.value) as 7 | 14 | 30)}
               >
-                <option value="7vs14">Last 7 days vs previous 14 days</option>
-                <option value="14vs14">Last 14 days vs previous 14 days</option>
-                <option value="30vs30">Last 30 days vs previous 30 days</option>
+                <option value={7}>Last 7 days</option>
+                <option value={14}>Last 14 days</option>
+                <option value={30}>Last 30 days</option>
               </select>
               {warmupLoading && (
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
               )}
             </div>
-            {warmupSummary && (
-              <div className="flex items-center gap-4 text-xs text-gray-500">
-                <span>Avg Score: <strong className="text-gray-900">{warmupSummary.avgScore}</strong></span>
-                <span className={warmupSummary.avgScoreChange >= 0 ? 'text-green-600' : 'text-red-600'}>
-                  {warmupSummary.avgScoreChange >= 0 ? '↑' : '↓'} {Math.abs(warmupSummary.avgScoreChange)}%
-                </span>
-                {warmupSummary.bouncesIncreasing > 0 && (
-                  <span className="text-red-600">⚠️ {warmupSummary.bouncesIncreasing} with ↑ bounces</span>
-                )}
-              </div>
-            )}
           </div>
         </CardContent>
       </Card>
+
+      {/* Summary Stats for Selected Period */}
+      <Card className="mb-6 bg-gray-50">
+        <CardContent className="pt-4 px-4 pb-4">
+          <div className="text-sm font-semibold text-gray-700 mb-3">
+            📊 In the last {selectedTimePeriod} days:
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            <div className={`p-3 rounded-lg text-center ${droppedAccountsData.dropped.length > 0 ? 'bg-red-100 border border-red-200' : 'bg-gray-100'}`}>
+              <div className={`text-2xl font-bold ${droppedAccountsData.dropped.length > 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                {droppedAccountsData.dropped.length}
+              </div>
+              <div className="text-xs text-gray-600">🔴 Dropped Significantly</div>
+              <div className="text-xs text-gray-400">(&gt;20% drop)</div>
+            </div>
+            <div className={`p-3 rounded-lg text-center ${droppedAccountsData.warning.length > 0 ? 'bg-yellow-100 border border-yellow-200' : 'bg-gray-100'}`}>
+              <div className={`text-2xl font-bold ${droppedAccountsData.warning.length > 0 ? 'text-yellow-600' : 'text-gray-600'}`}>
+                {droppedAccountsData.warning.length}
+              </div>
+              <div className="text-xs text-gray-600">🟡 Warning</div>
+              <div className="text-xs text-gray-400">(10-20% drop)</div>
+            </div>
+            <div className="p-3 rounded-lg text-center bg-green-100 border border-green-200">
+              <div className="text-2xl font-bold text-green-600">
+                {droppedAccountsData.stable.length}
+              </div>
+              <div className="text-xs text-gray-600">🟢 Stable</div>
+              <div className="text-xs text-gray-400">(within ±10%)</div>
+            </div>
+            <div className="p-3 rounded-lg text-center bg-blue-100 border border-blue-200">
+              <div className="text-2xl font-bold text-blue-600">
+                {droppedAccountsData.improved.length}
+              </div>
+              <div className="text-xs text-gray-600">📈 Improved</div>
+              <div className="text-xs text-gray-400">(&gt;10% up)</div>
+            </div>
+            <div className="p-3 rounded-lg text-center bg-purple-100 border border-purple-200">
+              <div className={`text-2xl font-bold ${droppedAccountsData.avgChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {droppedAccountsData.avgChange >= 0 ? '+' : ''}{droppedAccountsData.avgChange}%
+              </div>
+              <div className="text-xs text-gray-600">📉 Avg Change</div>
+              <div className="text-xs text-gray-400">(all accounts)</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Dropped Significantly Section - Only show if there are dropped accounts */}
+      {droppedAccountsData.dropped.length > 0 && (
+        <Card className="mb-6 border-2 border-red-300 bg-gradient-to-r from-red-50 to-white">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <span className="text-2xl">🚨</span>
+              Dropped Significantly in Last {selectedTimePeriod} Days
+              <Badge variant="destructive" className="ml-2 text-base px-3 py-1">
+                {droppedAccountsData.dropped.length} accounts
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="space-y-2">
+              {droppedAccountsData.dropped.slice(0, 10).map((account) => (
+                <div
+                  key={account.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-red-50 border border-red-200 hover:bg-red-100 transition-colors cursor-pointer"
+                  onClick={() => {
+                    const email = apiEmails?.find(e => e.email.toLowerCase() === account.email.toLowerCase());
+                    if (email) openAccountDetail(email);
+                  }}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm truncate">{account.email}</div>
+                    <div className="text-xs text-gray-500">{account.name || account.email.split('@')[0]}</div>
+                  </div>
+                  <div className="flex items-center gap-3 mt-2 sm:mt-0">
+                    <div className="text-sm text-gray-600">
+                      <span className="font-medium">{account.fromScore}</span>
+                      <span className="mx-1">→</span>
+                      <span className="font-medium">{account.toScore}</span>
+                    </div>
+                    <Badge variant="destructive" className="whitespace-nowrap text-sm px-2 py-0.5">
+                      ↓ {Math.abs(Math.round(account.percentChange))}%
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+              {droppedAccountsData.dropped.length > 10 && (
+                <div className="text-center py-2">
+                  <button
+                    onClick={() => handleQuickFilter("declining")}
+                    className="text-sm text-red-600 hover:text-red-800 underline"
+                  >
+                    View all {droppedAccountsData.dropped.length} dropped accounts →
+                  </button>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Improved Accounts Section - Show if there are improved accounts */}
+      {droppedAccountsData.improved.length > 0 && droppedAccountsData.dropped.length === 0 && (
+        <Card className="mb-6 border-2 border-green-300 bg-gradient-to-r from-green-50 to-white">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <span className="text-2xl">🎉</span>
+              Accounts Improving in Last {selectedTimePeriod} Days
+              <Badge className="ml-2 text-base px-3 py-1 bg-green-600">
+                {droppedAccountsData.improved.length} accounts
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="space-y-2">
+              {droppedAccountsData.improved.slice(0, 5).map((account) => (
+                <div
+                  key={account.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-green-50 border border-green-200"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm truncate">{account.email}</div>
+                  </div>
+                  <div className="flex items-center gap-3 mt-2 sm:mt-0">
+                    <div className="text-sm text-gray-600">
+                      <span className="font-medium">{account.fromScore}</span>
+                      <span className="mx-1">→</span>
+                      <span className="font-medium">{account.toScore}</span>
+                    </div>
+                    <Badge className="whitespace-nowrap text-sm px-2 py-0.5 bg-green-600">
+                      ↑ {Math.round(account.percentChange)}%
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Quick Filter Buttons - Trend-based */}
       <div className="flex flex-wrap gap-2 mb-4">
@@ -1603,12 +1798,21 @@ function EmailsPageContent() {
           const trend = calculateAccountTrend(email.id);
           const trendAnalysis = trendAnalysisMap.get(email.id);
           const healthInfo = trendAnalysis ? getHealthLabel(trendAnalysis.health) : null;
+          
+          // Get warmup stats for this account to show period change
+          const warmupStats = warmupStatsMap.get(email.email.toLowerCase());
+          const periodChange = warmupStats?.changes?.warmup_score;
+          const hasSignificantDrop = periodChange !== undefined && periodChange < -20;
+          const hasWarningDrop = periodChange !== undefined && periodChange >= -20 && periodChange < -10;
+          const hasImproved = periodChange !== undefined && periodChange > 10;
 
           return (
             <Card
               key={email.id}
               className={`cursor-pointer transition-all hover:shadow-md ${
                 isSelected ? "ring-2 ring-blue-500 bg-blue-50" :
+                hasSignificantDrop ? "border-red-300 bg-red-50 ring-1 ring-red-200" :
+                hasWarningDrop ? "border-yellow-300 bg-yellow-50" :
                 trendAnalysis?.health === "declining" ? "border-red-200 bg-red-50" :
                 trendAnalysis?.health === "warning" ? "border-yellow-200 bg-yellow-50" :
                 "hover:bg-gray-50"
@@ -1632,6 +1836,15 @@ function EmailsPageContent() {
                         </div>
                         <div className="text-xs text-gray-500">{email.name}</div>
                       </div>
+                      {/* Period change badge */}
+                      {periodChange !== undefined && Math.abs(periodChange) > 10 && (
+                        <Badge 
+                          variant={hasSignificantDrop || hasWarningDrop ? "destructive" : "default"}
+                          className={`ml-2 text-xs ${hasImproved ? 'bg-green-600' : ''}`}
+                        >
+                          {periodChange > 0 ? '↑' : '↓'} {Math.abs(Math.round(periodChange))}% in {selectedTimePeriod}d
+                        </Badge>
+                      )}
                       {/* View detail indicator */}
                       <span className="text-gray-400 text-lg ml-2">›</span>
                     </div>
