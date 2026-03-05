@@ -277,57 +277,72 @@ export default function WarmupPage() {
           <div className="space-y-3 lg:space-y-4">
             {/* Day progression */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <div className="w-full sm:w-20 text-xs lg:text-sm text-gray-500">Days 1-5</div>
-              <div className="flex-1 h-6 lg:h-8 bg-orange-100 rounded-lg relative">
-                <div className="absolute inset-0 flex items-center px-3 lg:px-4">
-                  <span className="text-xs lg:text-sm font-medium text-orange-800">5 emails/day</span>
+              <div className="flex justify-between sm:block w-full sm:w-20">
+                <span className="text-xs lg:text-sm text-gray-500">Days 1-5</span>
+                <span className="text-xs text-gray-500 sm:hidden">{warmingEmails.filter(e => e.warmupDay <= 5).length} emails</span>
+              </div>
+              <div className="flex-1 h-6 lg:h-8 bg-orange-100 rounded-lg relative overflow-hidden">
+                <div className="absolute inset-0 flex items-center px-2 lg:px-4">
+                  <span className="text-xs font-medium text-orange-800 truncate">5/day</span>
                 </div>
               </div>
-              <div className="w-full sm:w-16 text-xs lg:text-sm text-gray-500 sm:text-right">
+              <div className="hidden sm:block w-16 text-xs lg:text-sm text-gray-500 text-right">
                 {warmingEmails.filter(e => e.warmupDay <= 5).length} emails
               </div>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <div className="w-full sm:w-20 text-xs lg:text-sm text-gray-500">Days 6-10</div>
-              <div className="flex-1 h-6 lg:h-8 bg-orange-200 rounded-lg relative">
-                <div className="absolute inset-0 flex items-center px-3 lg:px-4">
-                  <span className="text-xs lg:text-sm font-medium text-orange-800">10 emails/day</span>
+              <div className="flex justify-between sm:block w-full sm:w-20">
+                <span className="text-xs lg:text-sm text-gray-500">Days 6-10</span>
+                <span className="text-xs text-gray-500 sm:hidden">{warmingEmails.filter(e => e.warmupDay > 5 && e.warmupDay <= 10).length} emails</span>
+              </div>
+              <div className="flex-1 h-6 lg:h-8 bg-orange-200 rounded-lg relative overflow-hidden">
+                <div className="absolute inset-0 flex items-center px-2 lg:px-4">
+                  <span className="text-xs font-medium text-orange-800 truncate">10/day</span>
                 </div>
               </div>
-              <div className="w-full sm:w-16 text-xs lg:text-sm text-gray-500 sm:text-right">
+              <div className="hidden sm:block w-16 text-xs lg:text-sm text-gray-500 text-right">
                 {warmingEmails.filter(e => e.warmupDay > 5 && e.warmupDay <= 10).length} emails
               </div>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <div className="w-full sm:w-20 text-xs lg:text-sm text-gray-500">Days 11-20</div>
-              <div className="flex-1 h-6 lg:h-8 bg-yellow-200 rounded-lg relative">
-                <div className="absolute inset-0 flex items-center px-3 lg:px-4">
-                  <span className="text-xs lg:text-sm font-medium text-yellow-800">20 emails/day</span>
+              <div className="flex justify-between sm:block w-full sm:w-20">
+                <span className="text-xs lg:text-sm text-gray-500">Days 11-20</span>
+                <span className="text-xs text-gray-500 sm:hidden">{warmingEmails.filter(e => e.warmupDay > 10 && e.warmupDay <= 20).length} emails</span>
+              </div>
+              <div className="flex-1 h-6 lg:h-8 bg-yellow-200 rounded-lg relative overflow-hidden">
+                <div className="absolute inset-0 flex items-center px-2 lg:px-4">
+                  <span className="text-xs font-medium text-yellow-800 truncate">20/day</span>
                 </div>
               </div>
-              <div className="w-full sm:w-16 text-xs lg:text-sm text-gray-500 sm:text-right">
+              <div className="hidden sm:block w-16 text-xs lg:text-sm text-gray-500 text-right">
                 {warmingEmails.filter(e => e.warmupDay > 10 && e.warmupDay <= 20).length} emails
               </div>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <div className="w-full sm:w-20 text-xs lg:text-sm text-gray-500">Days 21-29</div>
-              <div className="flex-1 h-6 lg:h-8 bg-green-200 rounded-lg relative">
-                <div className="absolute inset-0 flex items-center px-3 lg:px-4">
-                  <span className="text-xs lg:text-sm font-medium text-green-800">35 emails/day</span>
+              <div className="flex justify-between sm:block w-full sm:w-20">
+                <span className="text-xs lg:text-sm text-gray-500">Days 21-29</span>
+                <span className="text-xs text-gray-500 sm:hidden">{warmingEmails.filter(e => e.warmupDay > 20 && e.warmupDay < 30).length} emails</span>
+              </div>
+              <div className="flex-1 h-6 lg:h-8 bg-green-200 rounded-lg relative overflow-hidden">
+                <div className="absolute inset-0 flex items-center px-2 lg:px-4">
+                  <span className="text-xs font-medium text-green-800 truncate">35/day</span>
                 </div>
               </div>
-              <div className="w-full sm:w-16 text-xs lg:text-sm text-gray-500 sm:text-right">
+              <div className="hidden sm:block w-16 text-xs lg:text-sm text-gray-500 text-right">
                 {warmingEmails.filter(e => e.warmupDay > 20 && e.warmupDay < 30).length} emails
               </div>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <div className="w-full sm:w-20 text-xs lg:text-sm text-gray-500">Day 30+</div>
-              <div className="flex-1 h-6 lg:h-8 bg-green-500 rounded-lg relative">
-                <div className="absolute inset-0 flex items-center px-3 lg:px-4">
-                  <span className="text-xs lg:text-sm font-medium text-white">50 emails/day (Ready!)</span>
+              <div className="flex justify-between sm:block w-full sm:w-20">
+                <span className="text-xs lg:text-sm text-gray-500">Day 30+</span>
+                <span className="text-xs text-gray-500 sm:hidden">{readyEmails.length.toLocaleString()} emails</span>
+              </div>
+              <div className="flex-1 h-6 lg:h-8 bg-green-500 rounded-lg relative overflow-hidden">
+                <div className="absolute inset-0 flex items-center px-2 lg:px-4">
+                  <span className="text-xs font-medium text-white truncate">50/day ✓</span>
                 </div>
               </div>
-              <div className="w-full sm:w-16 text-xs lg:text-sm text-gray-500 sm:text-right">
+              <div className="hidden sm:block w-16 text-xs lg:text-sm text-gray-500 text-right">
                 {readyEmails.length.toLocaleString()} emails
               </div>
             </div>

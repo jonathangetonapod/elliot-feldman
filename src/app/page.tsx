@@ -283,38 +283,38 @@ export default function Dashboard() {
                 
                 return (
                   <Card>
-                    <CardHeader className="pb-2 px-4 lg:px-6">
+                    <CardHeader className="pb-2 px-3 lg:px-6">
                       <CardTitle className="text-sm lg:text-base flex items-center gap-2">
                         📊 Reply Rate Distribution
                       </CardTitle>
                     </CardHeader>
-                    <CardContent className="px-4 lg:px-6 pb-4">
-                      <div className="space-y-3">
+                    <CardContent className="px-3 lg:px-6 pb-4">
+                      <div className="space-y-2 lg:space-y-3">
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="text-lg">🔴</span>
-                            <span className="text-sm text-gray-600">Critical (&lt;1%)</span>
+                          <div className="flex items-center gap-1.5 lg:gap-2">
+                            <span className="text-sm lg:text-lg">🔴</span>
+                            <span className="text-xs lg:text-sm text-gray-600">Critical <span className="hidden sm:inline">(&lt;1%)</span></span>
                           </div>
-                          <span className="font-bold text-red-600">{criticalAccounts.length}</span>
+                          <span className="font-bold text-red-600 text-sm lg:text-base">{criticalAccounts.length}</span>
                         </div>
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="text-lg">🟡</span>
-                            <span className="text-sm text-gray-600">Warning (1-2%)</span>
+                          <div className="flex items-center gap-1.5 lg:gap-2">
+                            <span className="text-sm lg:text-lg">🟡</span>
+                            <span className="text-xs lg:text-sm text-gray-600">Warning <span className="hidden sm:inline">(1-2%)</span></span>
                           </div>
-                          <span className="font-bold text-yellow-600">{warningAccounts.length}</span>
+                          <span className="font-bold text-yellow-600 text-sm lg:text-base">{warningAccounts.length}</span>
                         </div>
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="text-lg">🟢</span>
-                            <span className="text-sm text-gray-600">Healthy (&gt;2%)</span>
+                          <div className="flex items-center gap-1.5 lg:gap-2">
+                            <span className="text-sm lg:text-lg">🟢</span>
+                            <span className="text-xs lg:text-sm text-gray-600">Healthy <span className="hidden sm:inline">(&gt;2%)</span></span>
                           </div>
-                          <span className="font-bold text-green-600">{healthyAccounts.length}</span>
+                          <span className="font-bold text-green-600 text-sm lg:text-base">{healthyAccounts.length}</span>
                         </div>
                         
                         {/* Distribution Bar */}
-                        <div className="mt-4">
-                          <div className="h-4 rounded-full overflow-hidden flex bg-gray-200">
+                        <div className="mt-3 lg:mt-4">
+                          <div className="h-3 lg:h-4 rounded-full overflow-hidden flex bg-gray-200">
                             {criticalAccounts.length > 0 && (
                               <div 
                                 className="bg-red-500 transition-all" 
@@ -334,9 +334,9 @@ export default function Dashboard() {
                               />
                             )}
                           </div>
-                          <div className="flex justify-between mt-2 text-xs text-gray-500">
-                            <span>{((criticalAccounts.length / total) * 100).toFixed(0)}% critical</span>
-                            <span>{((healthyAccounts.length / total) * 100).toFixed(0)}% healthy</span>
+                          <div className="flex justify-between mt-1.5 lg:mt-2 text-xs text-gray-500">
+                            <span>{((criticalAccounts.length / total) * 100).toFixed(0)}%</span>
+                            <span>{((healthyAccounts.length / total) * 100).toFixed(0)}%</span>
                           </div>
                         </div>
                       </div>
@@ -361,44 +361,44 @@ export default function Dashboard() {
                 
                 return (
                   <Card>
-                    <CardHeader className="pb-2 px-4 lg:px-6">
+                    <CardHeader className="pb-2 px-3 lg:px-6">
                       <CardTitle className="text-sm lg:text-base flex items-center gap-2">
                         🔥 Warmup Status
                       </CardTitle>
                     </CardHeader>
-                    <CardContent className="px-4 lg:px-6 pb-4">
+                    <CardContent className="px-3 lg:px-6 pb-4">
                       <div className="space-y-3">
                         {/* On/Off Status */}
                         <div className="flex items-center justify-between pb-2 border-b">
                           <div className="flex items-center gap-3">
                             <div className="text-center">
-                              <div className="text-lg font-bold text-orange-600">{warmupOn.length}</div>
+                              <div className="text-base lg:text-lg font-bold text-orange-600">{warmupOn.length}</div>
                               <div className="text-xs text-gray-500">ON</div>
                             </div>
                             <div className="text-gray-300">|</div>
                             <div className="text-center">
-                              <div className="text-lg font-bold text-gray-400">{warmupOff.length}</div>
+                              <div className="text-base lg:text-lg font-bold text-gray-400">{warmupOff.length}</div>
                               <div className="text-xs text-gray-500">OFF</div>
                             </div>
                           </div>
                         </div>
                         
                         {/* Daily Limit Tiers */}
-                        <div className="space-y-1.5 text-sm">
+                        <div className="space-y-1.5 text-xs lg:text-sm">
                           <div className="flex justify-between">
-                            <span className="text-gray-600">5-10/day (early)</span>
+                            <span className="text-gray-600">5-10/day <span className="hidden sm:inline">(early)</span></span>
                             <span className="font-medium">{earlyWarmup.length}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-gray-600">11-20/day (mid)</span>
+                            <span className="text-gray-600">11-20/day <span className="hidden sm:inline">(mid)</span></span>
                             <span className="font-medium">{midWarmup.length}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-gray-600">21-35/day (late)</span>
+                            <span className="text-gray-600">21-35/day <span className="hidden sm:inline">(late)</span></span>
                             <span className="font-medium">{lateWarmup.length}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-gray-600">36-50/day (fully warmed)</span>
+                            <span className="text-gray-600">36-50/day <span className="hidden sm:inline">(ready)</span></span>
                             <span className="font-bold text-green-600">{fullyWarmed.length}</span>
                           </div>
                         </div>
@@ -432,29 +432,26 @@ export default function Dashboard() {
                 
                 return (
                   <Card>
-                    <CardHeader className="pb-2 px-4 lg:px-6">
+                    <CardHeader className="pb-2 px-3 lg:px-6">
                       <CardTitle className="text-sm lg:text-base flex items-center gap-2">
-                        🏆 Top & Bottom Performers
+                        🏆 Top & Bottom
                       </CardTitle>
                     </CardHeader>
-                    <CardContent className="px-4 lg:px-6 pb-4">
-                      <div className="space-y-4">
+                    <CardContent className="px-3 lg:px-6 pb-4">
+                      <div className="space-y-3 lg:space-y-4">
                         {/* Top Performers */}
                         <div>
-                          <div className="text-xs font-medium text-green-700 mb-2">🌟 Best Performing</div>
-                          <div className="space-y-1.5">
+                          <div className="text-xs font-medium text-green-700 mb-1.5 lg:mb-2">🌟 Best</div>
+                          <div className="space-y-1 lg:space-y-1.5">
                             {topPerformers.length > 0 ? topPerformers.map((email, idx) => (
-                              <div key={email.id} className="flex items-center justify-between text-xs bg-green-50 rounded px-2 py-1.5">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <span className="text-green-600 font-bold">{idx + 1}</span>
+                              <div key={email.id} className="flex items-center justify-between text-xs bg-green-50 rounded px-1.5 lg:px-2 py-1 lg:py-1.5">
+                                <div className="flex items-center gap-1 lg:gap-2 min-w-0 flex-1">
+                                  <span className="text-green-600 font-bold shrink-0">{idx + 1}</span>
                                   <span className="truncate text-gray-700" title={email.email}>
-                                    {email.email.length > 20 ? email.email.slice(0, 20) + '...' : email.email}
+                                    {email.email.split('@')[0].slice(0, 12)}
                                   </span>
                                 </div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <span className="font-bold text-green-700">{email.replyRate}%</span>
-                                  <span className="text-gray-400">({email.sentLast7Days})</span>
-                                </div>
+                                <span className="font-bold text-green-700 shrink-0 ml-1">{email.replyRate}%</span>
                               </div>
                             )) : (
                               <div className="text-xs text-gray-400 text-center py-2">No data</div>
@@ -464,20 +461,17 @@ export default function Dashboard() {
                         
                         {/* Bottom Performers */}
                         <div>
-                          <div className="text-xs font-medium text-red-700 mb-2">⚠️ Need Attention</div>
-                          <div className="space-y-1.5">
+                          <div className="text-xs font-medium text-red-700 mb-1.5 lg:mb-2">⚠️ Attention</div>
+                          <div className="space-y-1 lg:space-y-1.5">
                             {bottomPerformers.length > 0 ? bottomPerformers.map((email, idx) => (
-                              <div key={email.id} className="flex items-center justify-between text-xs bg-red-50 rounded px-2 py-1.5">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <span className="text-red-600 font-bold">{idx + 1}</span>
+                              <div key={email.id} className="flex items-center justify-between text-xs bg-red-50 rounded px-1.5 lg:px-2 py-1 lg:py-1.5">
+                                <div className="flex items-center gap-1 lg:gap-2 min-w-0 flex-1">
+                                  <span className="text-red-600 font-bold shrink-0">{idx + 1}</span>
                                   <span className="truncate text-gray-700" title={email.email}>
-                                    {email.email.length > 20 ? email.email.slice(0, 20) + '...' : email.email}
+                                    {email.email.split('@')[0].slice(0, 12)}
                                   </span>
                                 </div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <span className="font-bold text-red-700">{email.replyRate}%</span>
-                                  <span className="text-gray-400">({email.sentLast7Days})</span>
-                                </div>
+                                <span className="font-bold text-red-700 shrink-0 ml-1">{email.replyRate}%</span>
                               </div>
                             )) : (
                               <div className="text-xs text-gray-400 text-center py-2">No data</div>
