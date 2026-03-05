@@ -1,114 +1,145 @@
 "use client";
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { getMockDashboardStats, generateMockEmails } from "@/lib/mock-data";
-import { useBisonData } from "@/lib/use-bison-data";
 import { useState, useEffect, useMemo } from "react";
+import { generateMockEmails } from "@/lib/mock-data";
+import { useBisonData } from "@/lib/use-bison-data";
 import {
   fetchWarmupStats,
   type WarmupAccountComparison,
   type WarmupPeriodType,
 } from "@/lib/bison-api";
-import Link from "next/link";
 
 // ==========================================
-// SIMPLIFIED ACCOUNTS PAGE
-// Goal: "Which accounts do I need to deal with TODAY?"
+// 🎯 CRYSTAL CLEAR ACCOUNTS PAGE
+// Goal: "Do I have accounts that need attention?" - Answer in 2 seconds
 // ==========================================
 
-interface AccountWithRisk {
+type AccountStatus = 'action' | 'watch' | 'healthy';
+
+interface SimpleAccount {
   id: number;
   email: string;
   currentReplyRate: number;
   baselineReplyRate: number;
   percentDrop: number;
-  status: 'action' | 'watch' | 'healthy';
+  status: AccountStatus;
+  statusMessage: string;
 }
 
 // Categorize accounts by reply rate drop
 function categorizeAccounts(warmupData: WarmupAccountComparison[]): {
-  needsAction: AccountWithRisk[];
-  watchList: AccountWithRisk[];
-  healthy: AccountWithRisk[];
+  needsAction: SimpleAccount[];
+  watch: SimpleAccount[];
+  healthy: SimpleAccount[];
 } {
-  const needsAction: AccountWithRisk[] = [];
-  const watchList: AccountWithRisk[] = [];
-  const healthy: AccountWithRisk[] = [];
+  const needsAction: SimpleAccount[] = [];
+  const watch: SimpleAccount[] = [];
+  const healthy: SimpleAccount[] = [];
 
   for (const account of warmupData) {
     const currentRate = account.current.warmup_reply_rate ?? 0;
     const baselineRate = account.baseline?.warmup_reply_rate ?? currentRate;
     const change = account.changes.warmup_reply_rate ?? 0;
 
-    const accountData: AccountWithRisk = {
+    const accountData: SimpleAccount = {
       id: account.id,
       email: account.email,
       currentReplyRate: Math.round(currentRate * 10) / 10,
       baselineReplyRate: Math.round(baselineRate * 10) / 10,
       percentDrop: Math.round(Math.abs(change)),
       status: 'healthy',
+      statusMessage: 'Performing well',
     };
 
     // 🔥 Needs Action: Reply rate dropped >30%
     if (change <= -30) {
       accountData.status = 'action';
+      accountData.statusMessage = 'Reply rate dropped significantly';
       needsAction.push(accountData);
     }
-    // ⚠️ Watch List: Reply rate dropped 10-30%
+    // ⚠️ Watch: Reply rate dropped 10-30%
     else if (change <= -10) {
       accountData.status = 'watch';
-      watchList.push(accountData);
+      accountData.statusMessage = 'Reply rate declining';
+      watch.push(accountData);
     }
-    // ✅ Healthy: Everything else
+    // ✅ Healthy
     else {
       accountData.status = 'healthy';
+      accountData.statusMessage = 'Performing well';
       healthy.push(accountData);
     }
   }
 
-  // Sort by severity (biggest drop first)
+  // Sort by severity
   needsAction.sort((a, b) => b.percentDrop - a.percentDrop);
-  watchList.sort((a, b) => b.percentDrop - a.percentDrop);
+  watch.sort((a, b) => b.percentDrop - a.percentDrop);
   healthy.sort((a, b) => b.currentReplyRate - a.currentReplyRate);
 
-  return { needsAction, watchList, healthy };
+  return { needsAction, watch, healthy };
 }
 
-// Account Card Component - Simple and scannable
-function AccountCard({ account, onView }: { account: AccountWithRisk; onView: () => void }) {
-  const statusConfig = {
-    action: { emoji: '🔥', bg: 'bg-red-50 hover:bg-red-100', border: 'border-red-200', text: 'text-red-700' },
-    watch: { emoji: '⚠️', bg: 'bg-yellow-50 hover:bg-yellow-100', border: 'border-yellow-200', text: 'text-yellow-700' },
-    healthy: { emoji: '✅', bg: 'bg-green-50 hover:bg-green-100', border: 'border-green-200', text: 'text-green-700' },
-  };
+// Status config for colors
+const STATUS_CONFIG = {
+  action: {
+    emoji: '🔥',
+    label: 'Needs Action',
+    bgCard: 'bg-red-500',
+    bgLight: 'bg-red-50',
+    border: 'border-red-200',
+    text: 'text-red-700',
+    textDark: 'text-white',
+  },
+  watch: {
+    emoji: '⚠️',
+    label: 'Watch',
+    bgCard: 'bg-amber-500',
+    bgLight: 'bg-amber-50',
+    border: 'border-amber-200',
+    text: 'text-amber-700',
+    textDark: 'text-white',
+  },
+  healthy: {
+    emoji: '✅',
+    label: 'Healthy',
+    bgCard: 'bg-emerald-500',
+    bgLight: 'bg-emerald-50',
+    border: 'border-emerald-200',
+    text: 'text-emerald-700',
+    textDark: 'text-white',
+  },
+};
 
-  const config = statusConfig[account.status];
-
+// Simple Account Row
+function AccountRow({ account }: { account: SimpleAccount }) {
+  const config = STATUS_CONFIG[account.status];
+  
   return (
-    <div
-      onClick={onView}
-      className={`p-4 rounded-lg border ${config.bg} ${config.border} cursor-pointer transition-all active:scale-[0.98]`}
-    >
-      <div className="flex items-center justify-between gap-3">
-        {/* Email + Status */}
-        <div className="flex items-center gap-3 min-w-0 flex-1">
-          <span className="text-xl shrink-0">{config.emoji}</span>
-          <span className="font-medium text-gray-900 truncate">{account.email}</span>
-        </div>
-
-        {/* Reply Rate Change */}
-        <div className="text-right shrink-0">
-          <div className={`text-sm font-bold ${config.text}`}>
-            {account.status !== 'healthy' ? (
-              <>Was {account.baselineReplyRate}% → Now {account.currentReplyRate}%</>
-            ) : (
-              <>{account.currentReplyRate}%</>
-            )}
+    <div className={`p-4 rounded-xl border-2 ${config.border} ${config.bgLight}`}>
+      <div className="flex items-start justify-between gap-4">
+        {/* Left: Email */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xl">{config.emoji}</span>
+            <span className="font-semibold text-gray-900 truncate">{account.email}</span>
           </div>
-          {account.status !== 'healthy' && (
-            <div className={`text-xs ${config.text}`}>
-              ↓{account.percentDrop}% drop
+          <p className={`text-sm ${config.text}`}>{account.statusMessage}</p>
+        </div>
+        
+        {/* Right: Stats */}
+        <div className="text-right shrink-0">
+          {account.status !== 'healthy' ? (
+            <>
+              <div className={`text-sm font-bold ${config.text}`}>
+                {account.baselineReplyRate}% → {account.currentReplyRate}%
+              </div>
+              <div className={`text-xs ${config.text} mt-1`}>
+                ↓{account.percentDrop}% drop
+              </div>
+            </>
+          ) : (
+            <div className="text-sm font-bold text-emerald-600">
+              {account.currentReplyRate}% reply rate
             </div>
           )}
         </div>
@@ -117,83 +148,92 @@ function AccountCard({ account, onView }: { account: AccountWithRisk; onView: ()
   );
 }
 
-// Section Component
-function AccountSection({
-  title,
-  emoji,
-  subtitle,
-  accounts,
-  bgColor,
-  textColor,
-  borderColor,
-  defaultCollapsed = false,
-  onViewAccount,
-}: {
-  title: string;
-  emoji: string;
-  subtitle: string;
-  accounts: AccountWithRisk[];
-  bgColor: string;
-  textColor: string;
-  borderColor: string;
-  defaultCollapsed?: boolean;
-  onViewAccount: (id: number) => void;
+// Big Summary Card
+function SummaryCard({ 
+  status, 
+  count, 
+  isSelected,
+  onClick,
+}: { 
+  status: AccountStatus;
+  count: number;
+  isSelected: boolean;
+  onClick: () => void;
 }) {
-  const [collapsed, setCollapsed] = useState(defaultCollapsed);
-
-  if (accounts.length === 0) return null;
-
+  const config = STATUS_CONFIG[status];
+  
   return (
-    <div className={`rounded-xl border-2 ${borderColor} overflow-hidden`}>
-      {/* Header - Always visible */}
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className={`w-full ${bgColor} p-4 flex items-center justify-between`}
-      >
-        <div className="flex items-center gap-3">
-          <span className="text-2xl">{emoji}</span>
-          <div className="text-left">
-            <h2 className={`text-lg font-bold ${textColor}`}>{title}</h2>
-            <p className="text-sm text-gray-600">{subtitle}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <Badge className={`${bgColor} ${textColor} border ${borderColor} text-lg px-3 py-1`}>
-            {accounts.length}
-          </Badge>
-          <span className="text-gray-400 text-xl">
-            {collapsed ? '▶' : '▼'}
-          </span>
-        </div>
-      </button>
-
-      {/* Account List */}
-      {!collapsed && (
-        <div className="p-4 space-y-2 bg-white">
-          {accounts.map((account) => (
-            <AccountCard
-              key={account.id}
-              account={account}
-              onView={() => onViewAccount(account.id)}
-            />
-          ))}
+    <button
+      onClick={onClick}
+      className={`
+        relative w-full p-6 rounded-2xl transition-all duration-200
+        ${config.bgCard} ${config.textDark}
+        ${isSelected ? 'ring-4 ring-offset-2 ring-gray-900 scale-[1.02]' : 'hover:scale-[1.02]'}
+        active:scale-[0.98] shadow-lg
+      `}
+    >
+      {/* Selection indicator */}
+      {isSelected && (
+        <div className="absolute -top-2 -right-2 w-6 h-6 bg-gray-900 rounded-full flex items-center justify-center">
+          <span className="text-white text-sm">✓</span>
         </div>
       )}
-    </div>
+      
+      <div className="text-center">
+        <div className="text-4xl mb-2">{config.emoji}</div>
+        <div className="text-5xl lg:text-6xl font-black mb-2">{count}</div>
+        <div className="text-sm lg:text-base font-semibold opacity-90 uppercase tracking-wide">
+          {config.label}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// Filter Tab
+function FilterTab({ 
+  status, 
+  count, 
+  isSelected, 
+  onClick,
+}: { 
+  status: AccountStatus | 'all';
+  count: number;
+  isSelected: boolean;
+  onClick: () => void;
+}) {
+  const config = status === 'all' 
+    ? { emoji: '📋', label: 'All', bgLight: 'bg-gray-100', text: 'text-gray-700', border: 'border-gray-300' }
+    : STATUS_CONFIG[status];
+  
+  return (
+    <button
+      onClick={onClick}
+      className={`
+        px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap
+        ${isSelected 
+          ? `${status === 'all' ? 'bg-gray-900 text-white' : STATUS_CONFIG[status].bgCard + ' text-white'}` 
+          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+        }
+      `}
+    >
+      {config.emoji} {config.label} ({count})
+    </button>
   );
 }
 
 export default function AccountsPage() {
-  const { emails: bisonEmails, loading, error, connected, lastFetched, refetch } = useBisonData();
-
-  // Time period state
-  const [timePeriod, setTimePeriod] = useState<7 | 14 | 30>(7);
+  const { emails: bisonEmails, loading, error, connected, refetch } = useBisonData();
   
-  // Warmup stats from Bison API
+  // State
+  const [timePeriod, setTimePeriod] = useState<7 | 14 | 30>(7);
   const [warmupData, setWarmupData] = useState<WarmupAccountComparison[]>([]);
   const [warmupLoading, setWarmupLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [selectedFilter, setSelectedFilter] = useState<AccountStatus | 'all'>('action');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Fetch warmup stats when period changes
+  // Fetch warmup stats
   useEffect(() => {
     async function fetchWarmup() {
       setWarmupLoading(true);
@@ -206,6 +246,7 @@ export default function AccountsPage() {
         const response = await fetchWarmupStats(periodMap[timePeriod], true);
         if (response.data) {
           setWarmupData(response.data);
+          setLastUpdated(new Date());
         }
       } catch (err) {
         console.error('Failed to fetch warmup stats:', err);
@@ -216,16 +257,46 @@ export default function AccountsPage() {
     fetchWarmup();
   }, [timePeriod]);
 
+  // Handle refresh
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      const periodMap: Record<7 | 14 | 30, WarmupPeriodType> = {
+        7: '7vs7',
+        14: '14vs14',
+        30: '30vs30',
+      };
+      const response = await fetchWarmupStats(periodMap[timePeriod], true);
+      if (response.data) {
+        setWarmupData(response.data);
+        setLastUpdated(new Date());
+      }
+      await refetch();
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   // Categorize accounts
-  const { needsAction, watchList, healthy } = useMemo(() => {
+  const { needsAction, watch, healthy } = useMemo(() => {
     if (warmupData.length === 0) {
       // Generate mock data for demo
       const mockEmails = bisonEmails.length > 0 ? bisonEmails : generateMockEmails();
-      const mockAccounts: AccountWithRisk[] = mockEmails.map((email, idx) => {
-        // Simulate some variance for demo
+      const mockAccounts: SimpleAccount[] = mockEmails.map((email, idx) => {
         const baseRate = email.replyRate || 2;
-        const drop = idx < 3 ? 40 : idx < 8 ? 20 : 5;
+        const drop = idx < 3 ? 45 : idx < 8 ? 20 : 5;
         const current = Math.max(0.1, baseRate - (baseRate * drop / 100));
+        
+        let status: AccountStatus = 'healthy';
+        let statusMessage = 'Performing well';
+        
+        if (drop > 30) {
+          status = 'action';
+          statusMessage = 'Reply rate dropped significantly';
+        } else if (drop > 10) {
+          status = 'watch';
+          statusMessage = 'Reply rate declining';
+        }
         
         return {
           id: email.id,
@@ -233,13 +304,14 @@ export default function AccountsPage() {
           currentReplyRate: Math.round(current * 10) / 10,
           baselineReplyRate: Math.round(baseRate * 10) / 10,
           percentDrop: drop,
-          status: drop > 30 ? 'action' : drop > 10 ? 'watch' : 'healthy',
-        } as AccountWithRisk;
+          status,
+          statusMessage,
+        };
       });
 
       return {
         needsAction: mockAccounts.filter(a => a.status === 'action'),
-        watchList: mockAccounts.filter(a => a.status === 'watch'),
+        watch: mockAccounts.filter(a => a.status === 'watch'),
         healthy: mockAccounts.filter(a => a.status === 'healthy'),
       };
     }
@@ -247,180 +319,195 @@ export default function AccountsPage() {
     return categorizeAccounts(warmupData);
   }, [warmupData, bisonEmails]);
 
-  // Handle view account
-  const handleViewAccount = (id: number) => {
-    window.location.href = `/emails?search=${encodeURIComponent(
-      warmupData.find(a => a.id === id)?.email || 
-      bisonEmails.find(e => e.id === id)?.email || ''
-    )}`;
-  };
+  // Get filtered accounts
+  const filteredAccounts = useMemo(() => {
+    switch (selectedFilter) {
+      case 'action': return needsAction;
+      case 'watch': return watch;
+      case 'healthy': return healthy;
+      case 'all': return [...needsAction, ...watch, ...healthy];
+    }
+  }, [selectedFilter, needsAction, watch, healthy]);
+
+  // Auto-select based on what needs attention
+  useEffect(() => {
+    if (needsAction.length > 0) {
+      setSelectedFilter('action');
+    } else if (watch.length > 0) {
+      setSelectedFilter('watch');
+    } else {
+      setSelectedFilter('healthy');
+    }
+  }, [needsAction.length, watch.length]);
 
   const isLoading = loading || warmupLoading;
   const useMockData = !connected || error || warmupData.length === 0;
+  const totalAccounts = needsAction.length + watch.length + healthy.length;
+
+  // Format last updated
+  const formatLastUpdated = (date: Date) => {
+    return date.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
 
   return (
-    <div className="p-4 lg:p-8 pb-24 lg:pb-8 max-w-4xl mx-auto">
-      {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between mb-2">
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Accounts</h1>
+    <div className="min-h-screen bg-gray-50 p-4 lg:p-8 pb-24 lg:pb-8">
+      <div className="max-w-3xl mx-auto">
+        
+        {/* ===== HEADER ===== */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <h1 className="text-2xl lg:text-3xl font-bold text-gray-900 flex items-center gap-2">
+              📧 Accounts
+            </h1>
+            
+            {/* Demo Mode Badge */}
+            {useMockData && (
+              <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-medium">
+                Demo Mode
+              </span>
+            )}
+          </div>
           
-          {/* Connection Status */}
-          {useMockData ? (
-            <Badge variant="outline" className="text-xs border-yellow-200 text-yellow-700">
-              <span className="inline-block w-2 h-2 bg-yellow-500 rounded-full mr-1.5"></span>
-              Demo Mode
-            </Badge>
-          ) : (
-            <Badge variant="outline" className="text-xs border-green-200 text-green-700">
-              <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-1.5"></span>
-              Live Data
-            </Badge>
-          )}
-        </div>
-        <p className="text-gray-500 text-sm">Which accounts need attention today?</p>
-      </div>
-
-      {/* Top Summary - 3 Numbers */}
-      <div className="grid grid-cols-3 gap-3 mb-6">
-        <Card className="bg-red-50 border-red-200">
-          <CardContent className="p-4 text-center">
-            <div className="text-3xl lg:text-4xl font-black text-red-600">
-              {needsAction.length}
-            </div>
-            <div className="text-xs lg:text-sm text-red-600 font-medium mt-1">
-              🔥 Need Action
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-yellow-50 border-yellow-200">
-          <CardContent className="p-4 text-center">
-            <div className="text-3xl lg:text-4xl font-black text-yellow-600">
-              {watchList.length}
-            </div>
-            <div className="text-xs lg:text-sm text-yellow-600 font-medium mt-1">
-              ⚠️ Watch
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-green-50 border-green-200">
-          <CardContent className="p-4 text-center">
-            <div className="text-3xl lg:text-4xl font-black text-green-600">
-              {healthy.length}
-            </div>
-            <div className="text-xs lg:text-sm text-green-600 font-medium mt-1">
-              ✅ Healthy
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Time Period Selector */}
-      <div className="flex items-center justify-between mb-6">
-        <span className="text-sm text-gray-600">Comparing reply rates over:</span>
-        <div className="flex gap-2">
-          {[7, 14, 30].map((days) => (
-            <button
-              key={days}
-              onClick={() => setTimePeriod(days as 7 | 14 | 30)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                timePeriod === days
-                  ? 'bg-gray-900 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
+          {/* Last Updated + Controls */}
+          <div className="flex flex-wrap items-center gap-3 text-sm text-gray-500">
+            <span>Last updated: {formatLastUpdated(lastUpdated)}</span>
+            
+            {/* Time Period Dropdown */}
+            <select
+              value={timePeriod}
+              onChange={(e) => setTimePeriod(Number(e.target.value) as 7 | 14 | 30)}
+              className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 text-sm cursor-pointer hover:border-gray-300"
             >
-              {days} days
+              <option value={7}>7 days</option>
+              <option value={14}>14 days</option>
+              <option value={30}>30 days</option>
+            </select>
+            
+            {/* Refresh Button */}
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 text-sm hover:border-gray-300 hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5"
+            >
+              <span className={isRefreshing ? 'animate-spin' : ''}>🔄</span>
+              Refresh
             </button>
-          ))}
+          </div>
         </div>
-      </div>
 
-      {/* Loading State */}
-      {isLoading && (
-        <div className="text-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto mb-4"></div>
-          <p className="text-gray-500">Loading accounts...</p>
-        </div>
-      )}
+        {/* ===== LOADING STATE ===== */}
+        {isLoading && (
+          <div className="text-center py-16">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-gray-900 mx-auto mb-4"></div>
+            <p className="text-gray-500">Loading accounts...</p>
+          </div>
+        )}
 
-      {/* Account Sections */}
-      {!isLoading && (
-        <div className="space-y-4">
-          {/* 🔥 Needs Action - RED */}
-          <AccountSection
-            title="Needs Action"
-            emoji="🔥"
-            subtitle="Reply rate dropped >30% — these accounts need attention"
-            accounts={needsAction}
-            bgColor="bg-red-100"
-            textColor="text-red-700"
-            borderColor="border-red-300"
-            onViewAccount={handleViewAccount}
-          />
+        {/* ===== MAIN CONTENT ===== */}
+        {!isLoading && (
+          <>
+            {/* ===== 3 BIG SUMMARY CARDS ===== */}
+            <div className="grid grid-cols-3 gap-3 lg:gap-4 mb-6">
+              <SummaryCard
+                status="action"
+                count={needsAction.length}
+                isSelected={selectedFilter === 'action'}
+                onClick={() => setSelectedFilter('action')}
+              />
+              <SummaryCard
+                status="watch"
+                count={watch.length}
+                isSelected={selectedFilter === 'watch'}
+                onClick={() => setSelectedFilter('watch')}
+              />
+              <SummaryCard
+                status="healthy"
+                count={healthy.length}
+                isSelected={selectedFilter === 'healthy'}
+                onClick={() => setSelectedFilter('healthy')}
+              />
+            </div>
 
-          {/* ⚠️ Watch List - YELLOW */}
-          <AccountSection
-            title="Watch List"
-            emoji="⚠️"
-            subtitle="Reply rate dropped 10-30% — keep an eye on these"
-            accounts={watchList}
-            bgColor="bg-yellow-100"
-            textColor="text-yellow-700"
-            borderColor="border-yellow-300"
-            onViewAccount={handleViewAccount}
-          />
+            {/* ===== ALL HEALTHY MESSAGE ===== */}
+            {needsAction.length === 0 && watch.length === 0 && healthy.length > 0 && (
+              <div className="mb-6 p-6 rounded-2xl bg-gradient-to-r from-emerald-100 to-green-100 border-2 border-emerald-200 text-center">
+                <div className="text-4xl mb-2">🎉</div>
+                <h2 className="text-xl font-bold text-emerald-700 mb-1">All accounts healthy!</h2>
+                <p className="text-emerald-600 text-sm">No accounts need attention right now. Great job!</p>
+              </div>
+            )}
 
-          {/* ✅ Healthy - GREEN (collapsed by default) */}
-          <AccountSection
-            title="Healthy"
-            emoji="✅"
-            subtitle="These accounts are performing well"
-            accounts={healthy}
-            bgColor="bg-green-100"
-            textColor="text-green-700"
-            borderColor="border-green-300"
-            defaultCollapsed={true}
-            onViewAccount={handleViewAccount}
-          />
+            {/* ===== FILTER TABS ===== */}
+            <div className="flex gap-2 mb-4 overflow-x-auto pb-2 -mx-4 px-4 lg:mx-0 lg:px-0">
+              <FilterTab
+                status="action"
+                count={needsAction.length}
+                isSelected={selectedFilter === 'action'}
+                onClick={() => setSelectedFilter('action')}
+              />
+              <FilterTab
+                status="watch"
+                count={watch.length}
+                isSelected={selectedFilter === 'watch'}
+                onClick={() => setSelectedFilter('watch')}
+              />
+              <FilterTab
+                status="healthy"
+                count={healthy.length}
+                isSelected={selectedFilter === 'healthy'}
+                onClick={() => setSelectedFilter('healthy')}
+              />
+              <FilterTab
+                status="all"
+                count={totalAccounts}
+                isSelected={selectedFilter === 'all'}
+                onClick={() => setSelectedFilter('all')}
+              />
+            </div>
 
-          {/* Empty State */}
-          {needsAction.length === 0 && watchList.length === 0 && healthy.length === 0 && (
-            <Card className="bg-gray-50">
-              <CardContent className="p-8 text-center">
-                <span className="text-4xl block mb-4">📭</span>
-                <h3 className="text-lg font-medium text-gray-900 mb-2">No accounts found</h3>
-                <p className="text-gray-500 text-sm">
-                  Connect your email accounts to start monitoring their health.
-                </p>
-              </CardContent>
-            </Card>
-          )}
+            {/* ===== ACCOUNT LIST ===== */}
+            <div className="space-y-3">
+              {filteredAccounts.length === 0 ? (
+                <div className="text-center py-12 bg-white rounded-2xl border border-gray-200">
+                  <div className="text-4xl mb-3">
+                    {selectedFilter === 'action' ? '✨' : selectedFilter === 'watch' ? '👀' : '📭'}
+                  </div>
+                  <h3 className="text-lg font-medium text-gray-900 mb-1">
+                    {selectedFilter === 'action' 
+                      ? 'No accounts need action!' 
+                      : selectedFilter === 'watch'
+                      ? 'No accounts to watch!'
+                      : 'No accounts found'}
+                  </h3>
+                  <p className="text-gray-500 text-sm">
+                    {selectedFilter === 'action' || selectedFilter === 'watch'
+                      ? 'All your accounts are performing well.'
+                      : 'Connect accounts to start monitoring.'}
+                  </p>
+                </div>
+              ) : (
+                filteredAccounts.map((account) => (
+                  <AccountRow key={account.id} account={account} />
+                ))
+              )}
+            </div>
 
-          {/* All Clear Message */}
-          {needsAction.length === 0 && watchList.length === 0 && healthy.length > 0 && (
-            <Card className="bg-gradient-to-r from-green-50 to-emerald-50 border-green-200">
-              <CardContent className="p-6 text-center">
-                <span className="text-4xl block mb-2">🎉</span>
-                <h3 className="text-lg font-bold text-green-700">All accounts are healthy!</h3>
-                <p className="text-green-600 text-sm mt-1">
-                  No accounts need attention right now. Great job!
-                </p>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      )}
-
-      {/* Quick Link to Details */}
-      <div className="mt-8 text-center">
-        <Link
-          href="/emails"
-          className="text-sm text-gray-500 hover:text-gray-700 underline"
-        >
-          View detailed email list →
-        </Link>
+            {/* ===== EMPTY STATE ===== */}
+            {totalAccounts === 0 && (
+              <div className="text-center py-16 bg-white rounded-2xl border border-gray-200">
+                <div className="text-5xl mb-4">📭</div>
+                <h3 className="text-xl font-medium text-gray-900 mb-2">No accounts found</h3>
+                <p className="text-gray-500">Connect your email accounts to start monitoring their health.</p>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );
