@@ -1,28 +1,215 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { getEmails, type EmailStatus, type WarmupStatus } from "@/lib/mock-data";
+import { getEmails, type EmailStatus, type WarmupStatus, type SenderEmail } from "@/lib/mock-data";
+
+interface BisonSenderEmail {
+  id: number;
+  email: string;
+  name: string;
+  status: "connected" | "disconnected";
+  warmup_enabled: boolean;
+  warmup_limit: number;
+  daily_limit: number;
+  emails_sent_today: number;
+  created_at: string;
+}
+
+// Transform Bison API data to our SenderEmail format
+function transformBisonEmail(bisonEmail: BisonSenderEmail): SenderEmail {
+  const emailParts = bisonEmail.email.split("@");
+  const domain = emailParts[1] || "unknown.com";
+  
+  // Calculate warmup day based on created_at (30 days warmup period)
+  const createdAt = new Date(bisonEmail.created_at);
+  const now = new Date();
+  const daysSinceCreation = Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+  const warmupDay = Math.min(daysSinceCreation, 30);
+  
+  // Determine warmup status
+  let warmupStatus: WarmupStatus;
+  if (!bisonEmail.warmup_enabled) {
+    warmupStatus = "paused";
+  } else if (warmupDay >= 30 || bisonEmail.daily_limit >= 40) {
+    warmupStatus = "ready";
+  } else {
+    warmupStatus = "warming";
+  }
+  
+  // Calculate warmup ready date
+  const warmupReadyDate = new Date(createdAt);
+  warmupReadyDate.setDate(warmupReadyDate.getDate() + 30);
+  
+  // Simulate reply rate based on connection status and warmup progress
+  // In a real scenario, this would come from campaign analytics
+  let replyRate: number;
+  if (bisonEmail.status === "disconnected") {
+    replyRate = 0;
+  } else if (warmupStatus === "warming") {
+    // Lower reply rate during warmup (0.5-1.5%)
+    replyRate = 0.5 + (warmupDay / 30) * 1;
+  } else {
+    // Healthy emails get 1.5-4% reply rate (simulated)
+    replyRate = 1.5 + (Math.abs(hashCode(bisonEmail.email)) % 250) / 100;
+  }
+  
+  // Determine health status based on reply rate
+  let status: EmailStatus;
+  if (bisonEmail.status === "disconnected") {
+    status = "burned";
+  } else if (replyRate >= 2) {
+    status = "healthy";
+  } else if (replyRate >= 1) {
+    status = "warning";
+  } else {
+    status = "burned";
+  }
+  
+  // Simulate 7-day stats
+  const sentLast7Days = bisonEmail.emails_sent_today * 7;
+  const repliesLast7Days = Math.round(sentLast7Days * (replyRate / 100));
+  
+  return {
+    id: bisonEmail.id,
+    email: bisonEmail.email,
+    name: bisonEmail.name || bisonEmail.email.split("@")[0],
+    domain,
+    status,
+    warmupStatus,
+    warmupDay,
+    warmupReadyDate: warmupReadyDate.toISOString().split("T")[0],
+    dailyLimit: bisonEmail.daily_limit,
+    currentVolume: bisonEmail.emails_sent_today,
+    replyRate: Math.round(replyRate * 100) / 100,
+    avgReplyRate: 2.2,
+    sentLast7Days,
+    repliesLast7Days,
+    lastSyncedAt: new Date().toISOString(),
+  };
+}
+
+// Simple hash function for consistent pseudo-random values
+function hashCode(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return hash;
+}
 
 export default function EmailsPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<EmailStatus | "all">("all");
   const [warmupFilter, setWarmupFilter] = useState<WarmupStatus | "all">("all");
   const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [apiEmails, setApiEmails] = useState<SenderEmail[] | null>(null);
+  const [usingMockData, setUsingMockData] = useState(false);
   const pageSize = 25;
 
-  const { data: emails, total, totalPages } = getEmails({
-    page,
-    pageSize,
-    search,
-    status: statusFilter,
-    warmupStatus: warmupFilter,
-    sortBy: "replyRate",
-    sortOrder: "asc",
-  });
+  // Fetch emails from Bison API
+  useEffect(() => {
+    async function fetchEmails() {
+      setLoading(true);
+      
+      try {
+        const response = await fetch("/api/bison?endpoint=sender-emails");
+        
+        if (!response.ok) {
+          console.warn("Bison API unavailable, falling back to mock data");
+          setUsingMockData(true);
+          setApiEmails(null);
+          return;
+        }
+        
+        const data = await response.json();
+        
+        if (data.error) {
+          console.warn("Bison API error:", data.error);
+          setUsingMockData(true);
+          setApiEmails(null);
+          return;
+        }
+        
+        // Handle both array response and paginated response
+        const emails = Array.isArray(data) ? data : (data.data || data.items || []);
+        
+        if (emails.length === 0) {
+          console.warn("No emails from Bison API, falling back to mock data");
+          setUsingMockData(true);
+          setApiEmails(null);
+          return;
+        }
+        
+        const transformedEmails = emails.map(transformBisonEmail);
+        setApiEmails(transformedEmails);
+        setUsingMockData(false);
+      } catch (error) {
+        console.error("Failed to fetch from Bison API:", error);
+        setUsingMockData(true);
+        setApiEmails(null);
+      } finally {
+        setLoading(false);
+      }
+    }
+    
+    fetchEmails();
+  }, []);
+
+  // Filter and paginate emails
+  const { data: emails, total, totalPages } = useMemo(() => {
+    // Use mock data if API data not available
+    if (apiEmails === null) {
+      return getEmails({
+        page,
+        pageSize,
+        search,
+        status: statusFilter,
+        warmupStatus: warmupFilter,
+        sortBy: "replyRate",
+        sortOrder: "asc",
+      });
+    }
+    
+    // Filter API data locally
+    let filteredEmails = [...apiEmails];
+    
+    // Search filter
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filteredEmails = filteredEmails.filter(
+        (e) =>
+          e.email.toLowerCase().includes(searchLower) ||
+          e.name.toLowerCase().includes(searchLower)
+      );
+    }
+    
+    // Status filter
+    if (statusFilter !== "all") {
+      filteredEmails = filteredEmails.filter((e) => e.status === statusFilter);
+    }
+    
+    // Warmup filter
+    if (warmupFilter !== "all") {
+      filteredEmails = filteredEmails.filter((e) => e.warmupStatus === warmupFilter);
+    }
+    
+    // Sort by reply rate (ascending - worst first)
+    filteredEmails.sort((a, b) => a.replyRate - b.replyRate);
+    
+    const total = filteredEmails.length;
+    const totalPages = Math.ceil(total / pageSize);
+    const start = (page - 1) * pageSize;
+    const data = filteredEmails.slice(start, start + pageSize);
+    
+    return { data, total, page, pageSize, totalPages };
+  }, [apiEmails, page, pageSize, search, statusFilter, warmupFilter]);
 
   const getStatusBadge = (status: EmailStatus) => {
     switch (status) {
@@ -46,11 +233,33 @@ export default function EmailsPage() {
     }
   };
 
+  if (loading) {
+    return (
+      <div className="p-4 lg:p-8">
+        <div className="mb-6 lg:mb-8">
+          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Email Accounts</h1>
+          <p className="text-gray-500 mt-1 text-sm lg:text-base">Loading sender emails...</p>
+        </div>
+        <Card>
+          <CardContent className="p-8">
+            <div className="flex items-center justify-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+              <span className="ml-3 text-gray-600">Fetching email accounts...</span>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 lg:p-8">
       <div className="mb-6 lg:mb-8">
         <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Email Accounts</h1>
-        <p className="text-gray-500 mt-1 text-sm lg:text-base">Monitor and manage {total.toLocaleString()} sender emails</p>
+        <p className="text-gray-500 mt-1 text-sm lg:text-base">
+          Monitor and manage {total.toLocaleString()} sender emails
+          {usingMockData && <span className="text-orange-500 ml-2">(Demo Mode)</span>}
+        </p>
       </div>
 
       {/* Filters */}
