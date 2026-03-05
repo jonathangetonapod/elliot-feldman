@@ -35,14 +35,7 @@ import {
   type TrendHealth,
 } from "@/lib/account-history";
 import {
-  OverallTrendChart,
   Sparkline as EnhancedSparkline,
-  ExpandedAccountChart,
-  MultiAccountComparisonChart,
-  generateMockTrendData,
-  generateMockAccountTrend,
-  type DateRange,
-  getDateRangeFromPreset,
 } from "@/components/trend-charts";
 import { AccountDetailModal, type AccountDetailData } from "@/components/account-detail-modal";
 
@@ -613,54 +606,6 @@ function MiniHealthPie({ stats }: { stats: { declining: number; warning: number;
   );
 }
 
-// Trend Distribution Pie Chart (larger version) - Using Bison warmup API data
-function TrendDistributionChart({ stats }: { stats: { declining: number; warning: number; stable: number; improving: number; newAccounts: number } }) {
-  const data = [
-    { name: "Stable", value: stats.stable, color: "#22c55e" },
-    { name: "Improving", value: stats.improving, color: "#3b82f6" },
-    { name: "Warning", value: stats.warning, color: "#eab308" },
-    { name: "Declining", value: stats.declining, color: "#ef4444" },
-    { name: "New", value: stats.newAccounts, color: "#9ca3af" },
-  ].filter(d => d.value > 0);
-
-  const total = data.reduce((sum, d) => sum + d.value, 0);
-
-  return (
-    <div className="flex items-center gap-4">
-      <div className="w-32 h-32">
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={data}
-              cx="50%"
-              cy="50%"
-              innerRadius={30}
-              outerRadius={55}
-              dataKey="value"
-              strokeWidth={2}
-              stroke="#fff"
-            >
-              {data.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={entry.color} />
-              ))}
-            </Pie>
-            <Tooltip formatter={(value, name) => [`${value} (${Math.round((value as number) / total * 100)}%)`, name]} />
-          </PieChart>
-        </ResponsiveContainer>
-      </div>
-      <div className="flex flex-col gap-1.5 text-sm">
-        {data.map((item) => (
-          <div key={item.name} className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }}></span>
-            <span className="text-gray-600">{item.name}:</span>
-            <span className="font-medium">{item.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function EmailsPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -690,10 +635,6 @@ function EmailsPageContent() {
   // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
-  // Charts visibility toggle
-  const [showCharts, setShowCharts] = useState(true);
-  const [expandedAccountId, setExpandedAccountId] = useState<number | null>(null);
-  
   // Account detail modal state
   const [selectedAccountForDetail, setSelectedAccountForDetail] = useState<AccountDetailData | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
@@ -706,9 +647,6 @@ function EmailsPageContent() {
   
   // Simple time period state for historical comparison
   const [selectedTimePeriod, setSelectedTimePeriod] = useState<7 | 14 | 30>(7);
-  
-  // Date range state for trend charts
-  const [trendDateRange, setTrendDateRange] = useState<DateRange>(() => getDateRangeFromPreset("7d"));
 
   const pageSize = 25;
 
@@ -962,160 +900,6 @@ function EmailsPageContent() {
       newAccounts,
     };
   }, [apiEmails, warmupStatsMap]);
-
-  // Get expanded account data for detail view - using Bison warmup API data
-  const expandedAccountData = useMemo(() => {
-    if (!expandedAccountId) return null;
-    
-    const email = apiEmails?.find(e => e.id === expandedAccountId) || 
-                  getEmails({ page: 1, pageSize: 10000 }).data.find(e => e.id === expandedAccountId);
-    
-    if (!email) return null;
-    
-    const warmup = warmupStatsMap.get(email.email.toLowerCase());
-    
-    if (warmup) {
-      const health = getHealthFromWarmup(warmup);
-      return {
-        accountId: expandedAccountId,
-        email: email.email,
-        replyRates: [], // Would need more API calls to get daily breakdown
-        currentAvg: warmup.current.warmup_score,
-        baselineAvg: warmup.baseline?.warmup_score ?? warmup.current.warmup_score,
-        percentChange: warmup.changes.warmup_score,
-        health: health,
-      };
-    }
-    
-    // Generate mock data for demo if no warmup data
-    const mockTrend = usingMockData ? 
-      (email.replyRate < 1 ? 'down' : email.replyRate > 3 ? 'up' : 'stable') as 'up' | 'down' | 'stable' : 
-      'stable';
-    return generateMockAccountTrend(expandedAccountId, email.email, mockTrend, 30);
-  }, [expandedAccountId, warmupStatsMap, apiEmails, usingMockData]);
-
-  // Get top 5 declining accounts for comparison chart - using Bison warmup API data
-  const topDecliningAccounts = useMemo(() => {
-    const declining: Array<{
-      accountId: number;
-      email: string;
-      replyRates: { date: string; rate: number }[];
-      currentAvg: number;
-      baselineAvg: number;
-      percentChange: number;
-      health: string;
-    }> = [];
-    
-    // Get accounts with declining or warning status from warmup API
-    const today = new Date();
-    const periodDays = selectedTimePeriod;
-    const baselineEndDate = new Date(today);
-    baselineEndDate.setDate(baselineEndDate.getDate() - periodDays);
-    
-    warmupStatsMap.forEach((warmup) => {
-      if (warmup.health === 'declining' || warmup.health === 'warning') {
-        const currentRate = warmup.current.warmup_reply_rate ?? 0;
-        const baselineRate = warmup.baseline?.warmup_reply_rate ?? currentRate;
-        const percentChange = warmup.changes.warmup_reply_rate ?? 0;
-        
-        // Create two data points: baseline and current
-        const replyRates: { date: string; rate: number }[] = [];
-        if (warmup.baseline) {
-          replyRates.push({
-            date: baselineEndDate.toISOString().split('T')[0],
-            rate: Math.round(baselineRate * 100) / 100,
-          });
-        }
-        replyRates.push({
-          date: today.toISOString().split('T')[0],
-          rate: Math.round(currentRate * 100) / 100,
-        });
-        
-        declining.push({
-          accountId: warmup.id,
-          email: warmup.email,
-          replyRates,
-          currentAvg: Math.round(currentRate * 100) / 100,
-          baselineAvg: Math.round(baselineRate * 100) / 100,
-          percentChange: Math.round(percentChange),
-          health: warmup.health,
-        });
-      }
-    });
-    
-    // If using mock data and no real declining accounts, generate some
-    if (usingMockData && declining.length === 0) {
-      const mockEmails = ['john@acme.com', 'sarah@startup.io', 'mike@corp.net', 'lisa@tech.co', 'alex@biz.org'];
-      return mockEmails.slice(0, 5).map((email, idx) => 
-        generateMockAccountTrend(1000 + idx, email, 'down', 30)
-      );
-    }
-    
-    // Sort by percent change (most negative first) and take top 5
-    return declining
-      .sort((a, b) => a.percentChange - b.percentChange)
-      .slice(0, 5);
-  }, [warmupStatsMap, usingMockData, selectedTimePeriod]);
-
-  // Generate trend data from warmup API data for the OverallTrendChart
-  // Shows current period vs baseline period reply rates as two data points
-  const overallTrendData = useMemo(() => {
-    if (warmupStatsMap.size === 0) return [];
-    
-    // Calculate overall average warmup reply rate for current and baseline periods
-    let currentTotal = 0;
-    let baselineTotal = 0;
-    let currentCount = 0;
-    let baselineCount = 0;
-    
-    warmupStatsMap.forEach((warmup) => {
-      const currentRate = warmup.current.warmup_reply_rate ?? 0;
-      const baselineRate = warmup.baseline?.warmup_reply_rate ?? null;
-      
-      if (currentRate > 0 || warmup.current.warmup_emails_sent > 0) {
-        currentTotal += currentRate;
-        currentCount++;
-      }
-      
-      if (baselineRate !== null && (baselineRate > 0 || (warmup.baseline?.warmup_emails_sent ?? 0) > 0)) {
-        baselineTotal += baselineRate;
-        baselineCount++;
-      }
-    });
-    
-    const currentAvg = currentCount > 0 ? currentTotal / currentCount : 0;
-    const baselineAvg = baselineCount > 0 ? baselineTotal / baselineCount : currentAvg;
-    
-    // Create two data points: baseline (previous period) and current
-    const today = new Date();
-    const periodDays = selectedTimePeriod;
-    
-    // Baseline period end date (start of current period)
-    const baselineEnd = new Date(today);
-    baselineEnd.setDate(baselineEnd.getDate() - periodDays);
-    
-    // Baseline period start date
-    const baselineStart = new Date(baselineEnd);
-    baselineStart.setDate(baselineStart.getDate() - periodDays);
-    
-    const trendData: { date: string; avgRate: number }[] = [];
-    
-    // Add baseline point (labeled as "Previous")
-    if (baselineCount > 0) {
-      trendData.push({
-        date: baselineEnd.toISOString().split('T')[0],
-        avgRate: Math.round(baselineAvg * 100) / 100,
-      });
-    }
-    
-    // Add current point
-    trendData.push({
-      date: today.toISOString().split('T')[0],
-      avgRate: Math.round(currentAvg * 100) / 100,
-    });
-    
-    return trendData;
-  }, [warmupStatsMap, selectedTimePeriod]);
 
   // Calculate counts for quick filters - using Bison warmup API data
   const filterCounts = useMemo(() => {
@@ -1595,76 +1379,6 @@ function EmailsPageContent() {
           </Card>
         </div>
       )}
-
-      {/* Charts Section - Collapsible */}
-      <div className="mb-6">
-        <button
-          onClick={() => setShowCharts(!showCharts)}
-          className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-gray-900 mb-3"
-        >
-          <span>{showCharts ? '▼' : '▶'}</span>
-          <span>📈 Trend Charts</span>
-        </button>
-
-        {showCharts && (
-          <>
-            {/* Overall Reply Rate Trend - Full Width with Date Picker */}
-            <OverallTrendChart 
-              data={usingMockData ? generateMockTrendData(60) : overallTrendData} 
-              loading={loading || warmupLoading}
-              dateRange={trendDateRange}
-              onDateRangeChange={(range) => {
-                setTrendDateRange(range);
-                // Sync date picker with warmup API period
-                if (range.preset === '7d') setSelectedTimePeriod(7);
-                else if (range.preset === '14d') setSelectedTimePeriod(14);
-                else if (range.preset === '30d') setSelectedTimePeriod(30);
-              }}
-              showDatePicker={true}
-            />
-
-            {/* Multi-Account Comparison - Top Declining */}
-            {(topDecliningAccounts.length > 0 || usingMockData) && (
-              <MultiAccountComparisonChart 
-                accounts={topDecliningAccounts}
-                title="Top Declining Accounts"
-                dateRange={trendDateRange}
-                onDateRangeChange={(range) => {
-                  setTrendDateRange(range);
-                  // Sync date picker with warmup API period
-                  if (range.preset === '7d') setSelectedTimePeriod(7);
-                  else if (range.preset === '14d') setSelectedTimePeriod(14);
-                  else if (range.preset === '30d') setSelectedTimePeriod(30);
-                }}
-                showDatePicker={true}
-                loading={warmupLoading}
-              />
-            )}
-
-            {/* Expanded Account Detail View */}
-            {expandedAccountData && (
-              <div className="mb-6">
-                <ExpandedAccountChart 
-                  accountData={expandedAccountData}
-                  onClose={() => setExpandedAccountId(null)}
-                />
-              </div>
-            )}
-
-            {/* Trend Distribution */}
-            <Card className="mb-6">
-              <CardHeader className="pb-2 px-3 lg:px-6">
-                <CardTitle className="text-sm lg:text-lg flex items-center gap-2">
-                  📊 Account Health Distribution
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="px-3 lg:px-6">
-                <TrendDistributionChart stats={filterCounts} />
-              </CardContent>
-            </Card>
-          </>
-        )}
-      </div>
 
       {/* At Risk & Warning Accounts - Using Bison warmup API data */}
       {/* 🔥 LIKELY TO BURN SECTION - Based on Reply Rate Week Over Week */}
@@ -2165,33 +1879,11 @@ function EmailsPageContent() {
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs text-gray-500">💬 Current Reply Rate</span>
                         {trend && trend.replyRates.length > 1 && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setExpandedAccountId(expandedAccountId === email.id ? null : email.id);
-                            }}
-                            className="hover:scale-110 transition-transform"
-                            title="Click to view full trend"
-                          >
-                            <EnhancedSparkline data={trend.replyRates} width={70} height={24} />
-                          </button>
+                          <EnhancedSparkline data={trend.replyRates} width={70} height={24} />
                         )}
                       </div>
                       <ReplyRateBar rate={email.replyRate} hasSends={hasSends} />
                     </div>
-
-                    {/* View Trend Button */}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full mb-3"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setExpandedAccountId(expandedAccountId === email.id ? null : email.id);
-                      }}
-                    >
-                      {expandedAccountId === email.id ? '📊 Hide Trend' : '📈 View Full Trend'}
-                    </Button>
 
                     {/* Warmup Stats (from API) */}
                     <WarmupStatsCard warmup={warmupStatsMap.get(email.email.toLowerCase())} />
@@ -2459,16 +2151,7 @@ function EmailsPageContent() {
                       <td className="p-4 text-center">
                         <div className="flex items-center justify-center gap-2">
                           {trend && trend.replyRates.length > 1 ? (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setExpandedAccountId(expandedAccountId === email.id ? null : email.id);
-                              }}
-                              className="hover:scale-110 transition-transform cursor-pointer"
-                              title="Click to expand chart"
-                            >
-                              <EnhancedSparkline data={trend.replyRates} width={70} height={24} />
-                            </button>
+                            <EnhancedSparkline data={trend.replyRates} width={70} height={24} />
                           ) : (
                             <span className="text-xs text-gray-400">—</span>
                           )}
