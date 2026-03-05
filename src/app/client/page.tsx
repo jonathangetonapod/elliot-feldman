@@ -3,6 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { useBisonData } from "@/lib/use-bison-data";
 import { getMockDashboardStats, generateMockEmails, getMockDomainHealth } from "@/lib/mock-data";
+import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 
 // Calculate overall health score (0-100)
 function calculateHealthScore(stats: {
@@ -43,9 +44,9 @@ function getHealthScoreColor(score: number): string {
 }
 
 function getHealthScoreBg(score: number): string {
-  if (score >= 80) return "bg-green-50 border-green-200";
-  if (score >= 60) return "bg-yellow-50 border-yellow-200";
-  return "bg-red-50 border-red-200";
+  if (score >= 80) return "bg-gradient-to-br from-green-50 to-green-100 border-green-300";
+  if (score >= 60) return "bg-gradient-to-br from-yellow-50 to-yellow-100 border-yellow-300";
+  return "bg-gradient-to-br from-red-50 to-red-100 border-red-300";
 }
 
 function getHealthScoreRingColor(score: number): string {
@@ -54,89 +55,121 @@ function getHealthScoreRingColor(score: number): string {
   return "#ef4444";
 }
 
-// Circular progress component for health score
-function HealthScoreCircle({ score }: { score: number }) {
-  const radius = 80;
-  const circumference = 2 * Math.PI * radius;
-  const strokeDashoffset = circumference - (score / 100) * circumference;
+function getHealthScoreEmoji(score: number): string {
+  if (score >= 80) return "🟢";
+  if (score >= 60) return "🟡";
+  return "🔴";
+}
+
+// Animated Circular Gauge Component using recharts
+function HealthScoreGauge({ score }: { score: number }) {
   const color = getHealthScoreRingColor(score);
+  const emoji = getHealthScoreEmoji(score);
+  
+  // Data for gauge
+  const data = [
+    { value: score, color: color },
+    { value: 100 - score, color: "#e5e7eb" },
+  ];
   
   return (
-    <div className="relative inline-flex items-center justify-center">
-      <svg className="w-48 h-48 transform -rotate-90">
-        {/* Background circle */}
-        <circle
-          cx="96"
-          cy="96"
-          r={radius}
-          stroke="#e5e7eb"
-          strokeWidth="12"
-          fill="transparent"
-        />
-        {/* Progress circle */}
-        <circle
-          cx="96"
-          cy="96"
-          r={radius}
-          stroke={color}
-          strokeWidth="12"
-          fill="transparent"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={strokeDashoffset}
-          className="transition-all duration-1000 ease-out"
-        />
-      </svg>
-      <div className="absolute flex flex-col items-center justify-center">
+    <div className="relative w-56 h-56 mx-auto">
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            startAngle={180}
+            endAngle={0}
+            innerRadius={70}
+            outerRadius={100}
+            dataKey="value"
+            strokeWidth={0}
+          >
+            {data.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={entry.color} />
+            ))}
+          </Pie>
+        </PieChart>
+      </ResponsiveContainer>
+      {/* Center content */}
+      <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ top: '-20px' }}>
+        <span className="text-5xl mb-1">{emoji}</span>
         <span className={`text-5xl font-bold ${getHealthScoreColor(score)}`}>
           {score}
         </span>
-        <span className="text-gray-500 text-lg">out of 100</span>
+        <span className="text-gray-500 text-lg font-medium">out of 100</span>
       </div>
     </div>
   );
 }
 
-// Metric card component
-function MetricCard({ 
+// Trend Arrow Component
+function TrendArrow({ trend, size = "lg" }: { trend: "up" | "down" | "stable"; size?: "sm" | "lg" }) {
+  const sizeClasses = size === "lg" ? "text-3xl" : "text-xl";
+  
+  if (trend === "up") {
+    return <span className={`${sizeClasses} text-green-600`}>↑</span>;
+  }
+  if (trend === "down") {
+    return <span className={`${sizeClasses} text-red-600`}>↓</span>;
+  }
+  return <span className={`${sizeClasses} text-gray-400`}>→</span>;
+}
+
+// Big Metric Card Component
+function BigMetricCard({ 
+  emoji,
   title, 
   value, 
-  icon, 
-  color 
+  subtext,
+  trend,
+  status,
 }: { 
+  emoji: string;
   title: string; 
-  value: React.ReactNode; 
-  icon: string; 
-  color: "green" | "yellow" | "red" | "blue";
+  value: string | number; 
+  subtext?: string;
+  trend?: "up" | "down" | "stable";
+  status: "good" | "warning" | "critical" | "neutral";
 }) {
-  const colorClasses = {
-    green: "bg-green-50 border-green-200",
-    yellow: "bg-yellow-50 border-yellow-200", 
-    red: "bg-red-50 border-red-200",
-    blue: "bg-blue-50 border-blue-200",
+  const statusStyles = {
+    good: "bg-gradient-to-br from-green-50 to-green-100 border-green-300",
+    warning: "bg-gradient-to-br from-yellow-50 to-yellow-100 border-yellow-300", 
+    critical: "bg-gradient-to-br from-red-50 to-red-100 border-red-300",
+    neutral: "bg-gradient-to-br from-blue-50 to-blue-100 border-blue-300",
   };
   
   const textColors = {
-    green: "text-green-700",
-    yellow: "text-yellow-700",
-    red: "text-red-700",
-    blue: "text-blue-700",
+    good: "text-green-700",
+    warning: "text-yellow-700",
+    critical: "text-red-700",
+    neutral: "text-blue-700",
   };
   
   return (
-    <div className={`p-6 rounded-2xl border-2 ${colorClasses[color]}`}>
-      <div className="flex items-center gap-3 mb-3">
-        <span className="text-3xl">{icon}</span>
-        <span className="text-gray-600 text-lg">{title}</span>
-      </div>
-      <div className={`text-4xl font-bold ${textColors[color]}`}>
-        {value}
-      </div>
-    </div>
+    <Card className={`border-2 hover:shadow-xl transition-all ${statusStyles[status]}`}>
+      <CardContent className="p-6 lg:p-8">
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <span className="text-4xl">{emoji}</span>
+            <span className="text-gray-600 text-lg font-medium">{title}</span>
+          </div>
+          {trend && <TrendArrow trend={trend} />}
+        </div>
+        <div className={`text-5xl lg:text-6xl font-bold ${textColors[status]}`}>
+          {value}
+        </div>
+        {subtext && (
+          <div className="text-gray-500 text-lg mt-2">{subtext}</div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
-// Status item component
+// Status Item with Big Visual
 function StatusItem({
   status,
   count,
@@ -153,17 +186,114 @@ function StatusItem({
   };
   
   const colors = {
-    good: "bg-green-50",
-    warning: "bg-yellow-50",
-    critical: "bg-red-50",
+    good: "bg-gradient-to-r from-green-50 to-green-100 border-green-300",
+    warning: "bg-gradient-to-r from-yellow-50 to-yellow-100 border-yellow-300",
+    critical: "bg-gradient-to-r from-red-50 to-red-100 border-red-300",
+  };
+
+  const textColors = {
+    good: "text-green-700",
+    warning: "text-yellow-700",
+    critical: "text-red-700",
   };
   
   return (
-    <div className={`flex items-center gap-4 p-5 rounded-xl ${colors[status]}`}>
-      <span className="text-3xl">{icons[status]}</span>
+    <div className={`flex items-center gap-6 p-6 rounded-2xl border-2 ${colors[status]} hover:shadow-lg transition-all`}>
+      <span className="text-5xl">{icons[status]}</span>
       <div>
-        <span className="text-2xl font-bold text-gray-800">{count}</span>
-        <span className="text-gray-600 text-lg ml-2">{label}</span>
+        <span className={`text-4xl font-bold ${textColors[status]}`}>{count}</span>
+        <span className="text-gray-600 text-xl ml-3">{label}</span>
+      </div>
+    </div>
+  );
+}
+
+// Visual Progress Bar
+function VisualProgressBar({ 
+  value, 
+  max, 
+  label,
+  showPercentage = true,
+}: { 
+  value: number; 
+  max: number; 
+  label: string;
+  showPercentage?: boolean;
+}) {
+  const percentage = max > 0 ? Math.round((value / max) * 100) : 0;
+  const color = percentage >= 80 ? "bg-green-500" : percentage >= 50 ? "bg-yellow-500" : "bg-red-500";
+  
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-between items-center">
+        <span className="text-gray-600">{label}</span>
+        {showPercentage && (
+          <span className="font-bold text-gray-800">{percentage}%</span>
+        )}
+      </div>
+      <div className="h-4 bg-gray-200 rounded-full overflow-hidden shadow-inner">
+        <div 
+          className={`h-full ${color} rounded-full transition-all duration-700 ease-out`}
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// Health Distribution Donut
+function HealthDistributionDonut({ 
+  healthy, 
+  warning, 
+  burned 
+}: { 
+  healthy: number; 
+  warning: number; 
+  burned: number;
+}) {
+  const total = healthy + warning + burned;
+  if (total === 0) return null;
+  
+  const data = [
+    { value: healthy, color: "#22c55e", label: "Healthy" },
+    { value: warning, color: "#eab308", label: "Warning" },
+    { value: burned, color: "#ef4444", label: "Burned" },
+  ].filter(d => d.value > 0);
+  
+  return (
+    <div className="flex items-center gap-6">
+      <div className="w-32 h-32">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={data}
+              cx="50%"
+              cy="50%"
+              innerRadius={35}
+              outerRadius={55}
+              dataKey="value"
+              strokeWidth={0}
+            >
+              {data.map((entry, index) => (
+                <Cell key={`cell-${index}`} fill={entry.color} />
+              ))}
+            </Pie>
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <span className="w-4 h-4 rounded-full bg-green-500"></span>
+          <span className="text-lg">✅ {healthy} healthy</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-4 h-4 rounded-full bg-yellow-500"></span>
+          <span className="text-lg">⚠️ {warning} warning</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-4 h-4 rounded-full bg-red-500"></span>
+          <span className="text-lg">🔴 {burned} burned</span>
+        </div>
       </div>
     </div>
   );
@@ -191,93 +321,103 @@ export default function ClientDashboard() {
   const needsReview = stats.warningEmails;
   const shouldReplace = stats.burnedEmails;
   
-  // Reply rate trend (mock for now - could be calculated from historical data)
-  const replyRateTrend = replyRate >= 2.5 ? "↑" : replyRate >= 1.5 ? "→" : "↓";
-  const trendColor = replyRate >= 2.5 ? "text-green-600" : replyRate >= 1.5 ? "text-yellow-600" : "text-red-600";
+  // Reply rate trend
+  const replyRateTrend = replyRate >= 2.5 ? "up" : replyRate >= 1.5 ? "stable" : "down";
+  const replyRateStatus = replyRate >= 2 ? "good" : replyRate >= 1 ? "warning" : "critical";
+  
+  // Needs attention status
+  const attentionStatus = needsAttention === 0 ? "good" : needsAttention <= 5 ? "warning" : "critical";
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 flex items-center justify-center">
         <div className="text-center">
-          <div className="text-4xl mb-4 animate-pulse">📊</div>
-          <p className="text-gray-500 text-xl">Loading your dashboard...</p>
+          <div className="text-6xl mb-4 animate-bounce">📊</div>
+          <p className="text-gray-500 text-2xl">Loading your dashboard...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6 lg:p-12">
+    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 p-6 lg:p-12">
       {/* Header */}
-      <div className="max-w-4xl mx-auto mb-10">
-        <h1 className="text-3xl lg:text-4xl font-bold text-gray-900 mb-2">
+      <div className="max-w-5xl mx-auto mb-10">
+        <h1 className="text-4xl lg:text-5xl font-bold text-gray-900 mb-3 flex items-center gap-4">
+          <span className="text-5xl">📊</span>
           Your Account Health
         </h1>
-        <p className="text-gray-500 text-lg">
-          {useMockData ? "Demo data" : "Last updated: just now"}
+        <p className="text-gray-500 text-xl">
+          {useMockData ? "📋 Demo data" : "🔄 Last updated: just now"}
         </p>
       </div>
       
       {/* Health Score - Big and Center */}
-      <div className="max-w-4xl mx-auto mb-12">
-        <Card className={`border-2 ${getHealthScoreBg(healthScore)}`}>
+      <div className="max-w-5xl mx-auto mb-12">
+        <Card className={`border-2 ${getHealthScoreBg(healthScore)} hover:shadow-2xl transition-all`}>
           <CardContent className="p-8 lg:p-12">
             <div className="flex flex-col items-center text-center">
-              <h2 className="text-2xl font-semibold text-gray-700 mb-6">
+              <h2 className="text-2xl lg:text-3xl font-semibold text-gray-700 mb-8">
                 Overall Health Score
               </h2>
-              <HealthScoreCircle score={healthScore} />
-              <p className="text-gray-500 text-lg mt-6 max-w-md">
+              <HealthScoreGauge score={healthScore} />
+              <p className="text-gray-600 text-xl mt-8 max-w-lg">
                 {healthScore >= 80 
-                  ? "Your accounts are performing great! Keep it up."
+                  ? "🎉 Your accounts are performing great! Keep it up."
                   : healthScore >= 60
-                  ? "Your accounts are doing okay, but there's room for improvement."
-                  : "Some accounts need attention. Let's work on improving them."}
+                  ? "👍 Your accounts are doing okay, but there's room for improvement."
+                  : "⚠️ Some accounts need attention. Let's work on improving them."}
               </p>
             </div>
           </CardContent>
         </Card>
       </div>
       
-      {/* Key Metrics Grid */}
-      <div className="max-w-4xl mx-auto mb-12">
-        <h2 className="text-xl font-semibold text-gray-700 mb-6">Key Numbers</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 lg:gap-6">
-          <MetricCard
+      {/* Key Metrics Grid - Big Bold Numbers */}
+      <div className="max-w-5xl mx-auto mb-12">
+        <h2 className="text-2xl font-semibold text-gray-700 mb-6 flex items-center gap-3">
+          <span className="text-3xl">📈</span>
+          Key Numbers
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <BigMetricCard
+            emoji="📧"
             title="Active Accounts"
             value={activeAccounts}
-            icon="📧"
-            color="green"
+            subtext={`${stats.totalEmails} total`}
+            status="neutral"
           />
-          <MetricCard
+          <BigMetricCard
+            emoji="💬"
             title="Reply Rate"
-            value={
-              <span>
-                {replyRate}%{" "}
-                <span className={`text-2xl ${trendColor}`}>{replyRateTrend}</span>
-              </span>
-            }
-            icon="💬"
-            color={replyRate >= 2 ? "green" : replyRate >= 1 ? "yellow" : "red"}
+            value={`${replyRate}%`}
+            subtext="7-day average"
+            trend={replyRateTrend}
+            status={replyRateStatus}
           />
-          <MetricCard
+          <BigMetricCard
+            emoji="👀"
             title="Needs Attention"
             value={needsAttention}
-            icon="👀"
-            color={needsAttention === 0 ? "green" : needsAttention <= 5 ? "yellow" : "red"}
+            subtext={needsAttention === 0 ? "All accounts healthy!" : "Accounts to review"}
+            status={attentionStatus}
           />
-          <MetricCard
+          <BigMetricCard
+            emoji="🚀"
             title="Ready to Scale"
             value={readyToScale}
-            icon="🚀"
-            color="blue"
+            subtext="Warmup complete"
+            status={readyToScale >= stats.totalEmails * 0.7 ? "good" : "warning"}
           />
         </div>
       </div>
       
-      {/* Status Summary */}
-      <div className="max-w-4xl mx-auto mb-12">
-        <h2 className="text-xl font-semibold text-gray-700 mb-6">Account Status</h2>
+      {/* Account Status Summary */}
+      <div className="max-w-5xl mx-auto mb-12">
+        <h2 className="text-2xl font-semibold text-gray-700 mb-6 flex items-center gap-3">
+          <span className="text-3xl">🏥</span>
+          Account Status
+        </h2>
         <div className="space-y-4">
           <StatusItem
             status="good"
@@ -300,30 +440,129 @@ export default function ClientDashboard() {
           )}
         </div>
       </div>
-      
-      {/* Quick Stats */}
-      <div className="max-w-4xl mx-auto">
-        <h2 className="text-xl font-semibold text-gray-700 mb-6">This Week</h2>
-        <div className="grid grid-cols-2 gap-4 lg:gap-6">
-          <div className="bg-white rounded-xl p-6 border border-gray-200">
-            <div className="text-gray-500 text-lg mb-2">Emails Sent</div>
-            <div className="text-3xl font-bold text-gray-800">
-              {stats.totalSentLast7Days.toLocaleString()}
-            </div>
-          </div>
-          <div className="bg-white rounded-xl p-6 border border-gray-200">
-            <div className="text-gray-500 text-lg mb-2">Replies Received</div>
-            <div className="text-3xl font-bold text-gray-800">
-              {stats.totalRepliesLast7Days.toLocaleString()}
-            </div>
-          </div>
+
+      {/* Visual Charts Section */}
+      <div className="max-w-5xl mx-auto mb-12">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Health Distribution */}
+          <Card className="border-2 hover:shadow-xl transition-all">
+            <CardContent className="p-8">
+              <h3 className="text-xl font-semibold text-gray-700 mb-6 flex items-center gap-2">
+                <span className="text-2xl">📊</span>
+                Health Distribution
+              </h3>
+              <HealthDistributionDonut 
+                healthy={stats.healthyEmails}
+                warning={stats.warningEmails}
+                burned={stats.burnedEmails}
+              />
+            </CardContent>
+          </Card>
+
+          {/* Warmup Progress */}
+          <Card className="border-2 hover:shadow-xl transition-all">
+            <CardContent className="p-8">
+              <h3 className="text-xl font-semibold text-gray-700 mb-6 flex items-center gap-2">
+                <span className="text-2xl">🔥</span>
+                Warmup Progress
+              </h3>
+              <div className="space-y-6">
+                <VisualProgressBar 
+                  value={stats.readyEmails} 
+                  max={stats.totalEmails} 
+                  label="Ready to send"
+                />
+                <VisualProgressBar 
+                  value={stats.warmingEmails} 
+                  max={stats.totalEmails} 
+                  label="Still warming"
+                />
+                <div className="pt-4 border-t">
+                  <div className="flex justify-between text-lg">
+                    <span className="text-gray-600">🟢 Ready</span>
+                    <span className="font-bold text-green-600">{stats.readyEmails}</span>
+                  </div>
+                  <div className="flex justify-between text-lg mt-2">
+                    <span className="text-gray-600">🔥 Warming</span>
+                    <span className="font-bold text-orange-600">{stats.warmingEmails}</span>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
       
+      {/* Quick Stats */}
+      <div className="max-w-5xl mx-auto mb-12">
+        <h2 className="text-2xl font-semibold text-gray-700 mb-6 flex items-center gap-3">
+          <span className="text-3xl">📅</span>
+          This Week
+        </h2>
+        <div className="grid grid-cols-2 gap-6">
+          <Card className="border-2 bg-gradient-to-br from-blue-50 to-blue-100 border-blue-300 hover:shadow-xl transition-all">
+            <CardContent className="p-8">
+              <div className="flex items-center gap-3 mb-3">
+                <span className="text-4xl">📤</span>
+                <span className="text-gray-600 text-lg">Emails Sent</span>
+              </div>
+              <div className="text-5xl font-bold text-blue-700">
+                {stats.totalSentLast7Days.toLocaleString()}
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-2 bg-gradient-to-br from-purple-50 to-purple-100 border-purple-300 hover:shadow-xl transition-all">
+            <CardContent className="p-8">
+              <div className="flex items-center gap-3 mb-3">
+                <span className="text-4xl">💬</span>
+                <span className="text-gray-600 text-lg">Replies Received</span>
+              </div>
+              <div className="text-5xl font-bold text-purple-700">
+                {stats.totalRepliesLast7Days.toLocaleString()}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+      
+      {/* At a Glance Summary */}
+      <div className="max-w-5xl mx-auto mb-12">
+        <Card className="border-2 bg-white hover:shadow-xl transition-all">
+          <CardContent className="p-8">
+            <h3 className="text-xl font-semibold text-gray-700 mb-6 flex items-center gap-2">
+              <span className="text-2xl">👁️</span>
+              At a Glance
+            </h3>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="text-center p-4 bg-green-50 rounded-xl">
+                <span className="text-4xl block mb-2">✅</span>
+                <span className="text-2xl font-bold text-green-700">{stats.healthyEmails}</span>
+                <span className="text-gray-600 block">Healthy</span>
+              </div>
+              <div className="text-center p-4 bg-yellow-50 rounded-xl">
+                <span className="text-4xl block mb-2">⚠️</span>
+                <span className="text-2xl font-bold text-yellow-700">{stats.warningEmails}</span>
+                <span className="text-gray-600 block">Warning</span>
+              </div>
+              <div className="text-center p-4 bg-red-50 rounded-xl">
+                <span className="text-4xl block mb-2">🔴</span>
+                <span className="text-2xl font-bold text-red-700">{stats.burnedEmails}</span>
+                <span className="text-gray-600 block">Burned</span>
+              </div>
+              <div className="text-center p-4 bg-blue-50 rounded-xl">
+                <span className="text-4xl block mb-2">📧</span>
+                <span className="text-2xl font-bold text-blue-700">{stats.totalEmails}</span>
+                <span className="text-gray-600 block">Total</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+      
       {/* Footer */}
-      <div className="max-w-4xl mx-auto mt-16 text-center">
-        <p className="text-gray-400">
-          Need help? Contact your account manager.
+      <div className="max-w-5xl mx-auto mt-16 text-center">
+        <p className="text-gray-400 text-lg">
+          Need help? Contact your account manager. 💬
         </p>
       </div>
     </div>
