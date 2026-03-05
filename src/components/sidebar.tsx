@@ -10,6 +10,7 @@ const navigation = [
   { name: "Email Accounts", href: "/emails", icon: "📧" },
   { name: "Domain Health", href: "/domains", icon: "🌐" },
   { name: "Warmup Calendar", href: "/warmup", icon: "📅" },
+  { name: "Settings", href: "/settings", icon: "⚙️" },
 ];
 
 export function Sidebar() {
