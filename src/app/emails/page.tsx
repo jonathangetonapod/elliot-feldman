@@ -154,6 +154,135 @@ function getHealthLabel(health: TrendHealth): { emoji: string; label: string; co
   }
 }
 
+// ==========================================
+// 🔥 BURN RISK PREDICTION SYSTEM
+// ==========================================
+
+interface BurnRiskResult {
+  score: number;  // 0-100, higher = more likely to burn
+  level: 'critical' | 'high' | 'moderate' | 'low';
+  emoji: string;  // 🔥🔥🔥, 🔥🔥, 🔥, or ✅
+  reasons: string[];
+}
+
+// Calculate burn risk for an account based on warmup API data
+function calculateBurnRisk(warmup: WarmupAccountComparison | undefined): BurnRiskResult {
+  if (!warmup) {
+    return { score: 0, level: 'low', emoji: '✅', reasons: [] };
+  }
+
+  let riskScore = 0;
+  const reasons: string[] = [];
+
+  const currentScore = warmup.current.warmup_score;
+  const baselineScore = warmup.baseline?.warmup_score ?? currentScore;
+  const scoreChange = warmup.changes.warmup_score;
+  const bounces = warmup.current.warmup_bounces_received_count;
+  const bouncesChange = warmup.changes.warmup_bounces_received_count;
+  const replies = warmup.current.warmup_replies_received;
+
+  // Risk factor 1: Warmup score below 50 (+30)
+  if (currentScore < 50) {
+    riskScore += 30;
+    reasons.push(`Warmup score critically low (${currentScore}/100)`);
+  }
+
+  // Risk factor 2: Warmup score dropped >30% (+30)
+  if (scoreChange < -30) {
+    riskScore += 30;
+    reasons.push(`Warmup score dropped ${Math.abs(Math.round(scoreChange))}% (was ${baselineScore} → now ${currentScore})`);
+  } else if (scoreChange < -20) {
+    // Lesser drop still concerning (+15)
+    riskScore += 15;
+    reasons.push(`Warmup score dropped ${Math.abs(Math.round(scoreChange))}%`);
+  }
+
+  // Risk factor 3: High bounces (>5) (+20)
+  if (bounces > 5) {
+    riskScore += 20;
+    reasons.push(`${bounces} bounces received (high)`);
+  } else if (bounces > 2) {
+    riskScore += 10;
+    reasons.push(`${bounces} bounces received`);
+  }
+
+  // Risk factor 4: Bounces increasing (+10)
+  if (bouncesChange > 0) {
+    riskScore += 10;
+    reasons.push(`Bounces increasing (+${bouncesChange} in period)`);
+  }
+
+  // Risk factor 5: Zero replies (+10)
+  if (replies === 0) {
+    riskScore += 10;
+    reasons.push(`0 warmup replies received`);
+  }
+
+  // Additional: Already in declining state from API
+  if (warmup.health === 'declining') {
+    riskScore += 10;
+    reasons.push(`Account already flagged as declining`);
+  }
+
+  // Cap at 100
+  riskScore = Math.min(100, riskScore);
+
+  // Determine level and emoji
+  let level: 'critical' | 'high' | 'moderate' | 'low';
+  let emoji: string;
+  
+  if (riskScore >= 70) {
+    level = 'critical';
+    emoji = '🔥🔥🔥';
+  } else if (riskScore >= 50) {
+    level = 'high';
+    emoji = '🔥🔥';
+  } else if (riskScore >= 30) {
+    level = 'moderate';
+    emoji = '🔥';
+  } else {
+    level = 'low';
+    emoji = '✅';
+  }
+
+  return { score: riskScore, level, emoji, reasons };
+}
+
+// Get CSS classes for burn risk level
+function getBurnRiskClasses(level: BurnRiskResult['level']): { bg: string; border: string; text: string; badge: string } {
+  switch (level) {
+    case 'critical':
+      return { bg: 'bg-red-100', border: 'border-red-400', text: 'text-red-800', badge: 'bg-red-600' };
+    case 'high':
+      return { bg: 'bg-orange-100', border: 'border-orange-400', text: 'text-orange-800', badge: 'bg-orange-600' };
+    case 'moderate':
+      return { bg: 'bg-yellow-100', border: 'border-yellow-400', text: 'text-yellow-800', badge: 'bg-yellow-600' };
+    default:
+      return { bg: 'bg-green-50', border: 'border-green-200', text: 'text-green-800', badge: 'bg-green-600' };
+  }
+}
+
+// Burn Risk Badge Component
+function BurnRiskBadge({ risk, compact = false }: { risk: BurnRiskResult; compact?: boolean }) {
+  if (risk.level === 'low') return null;
+  
+  const classes = getBurnRiskClasses(risk.level);
+  
+  if (compact) {
+    return (
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold text-white ${classes.badge}`}>
+        {risk.emoji} {risk.score}
+      </span>
+    );
+  }
+  
+  return (
+    <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-bold text-white ${classes.badge}`}>
+      {risk.emoji} {risk.level.toUpperCase()} RISK ({risk.score}/100)
+    </span>
+  );
+}
+
 // Mini Sparkline component for reply rate history
 function MiniSparkline({ data, width = 60, height = 20 }: { data: number[]; width?: number; height?: number }) {
   if (data.length < 2) {
@@ -680,6 +809,40 @@ function EmailsPageContent() {
   // NOTE: We no longer need localStorage-based history tracking!
   // All trend data comes from the Bison warmup API which has real historical data
 
+  // 🔥 Calculate BURN RISK for all accounts
+  const burnRiskData = useMemo(() => {
+    const allEmails = apiEmails || getEmails({ page: 1, pageSize: 10000 }).data;
+    
+    const accountsWithRisk = allEmails.map(email => {
+      const warmup = warmupStatsMap.get(email.email.toLowerCase());
+      const risk = calculateBurnRisk(warmup);
+      return {
+        email,
+        warmup,
+        risk,
+      };
+    });
+    
+    // Filter to at-risk accounts (score >= 30)
+    const atRisk = accountsWithRisk
+      .filter(a => a.risk.score >= 30)
+      .sort((a, b) => b.risk.score - a.risk.score); // Sort by highest risk first
+    
+    // Count by level
+    const critical = atRisk.filter(a => a.risk.level === 'critical').length;
+    const high = atRisk.filter(a => a.risk.level === 'high').length;
+    const moderate = atRisk.filter(a => a.risk.level === 'moderate').length;
+    
+    return {
+      allWithRisk: accountsWithRisk,
+      atRisk,
+      critical,
+      high,
+      moderate,
+      total: atRisk.length,
+    };
+  }, [apiEmails, warmupStatsMap]);
+
   // Calculate dropped accounts for selected time period
   const droppedAccountsData = useMemo(() => {
     const allAccounts = Array.from(warmupStatsMap.values());
@@ -1146,15 +1309,43 @@ function EmailsPageContent() {
       </div>
 
       {/* Overview Summary - Trend Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-6">
+        {/* 🔥 BURN RISK Summary Card - PROMINENT */}
+        <Card className={`col-span-2 lg:col-span-1 hover:shadow-lg transition-shadow ${
+          burnRiskData.total > 0 
+            ? "bg-gradient-to-br from-red-100 to-orange-100 border-2 border-red-400" 
+            : "bg-gradient-to-br from-green-50 to-emerald-100 border-green-300"
+        }`}>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-2xl">{burnRiskData.total > 0 ? '🔥' : '✅'}</span>
+              <span className={`text-xs uppercase tracking-wide font-bold ${
+                burnRiskData.total > 0 ? 'text-red-600' : 'text-green-600'
+              }`}>Burn Risk</span>
+            </div>
+            <div className={`text-3xl font-black ${burnRiskData.total > 0 ? 'text-red-600' : 'text-green-600'}`}>
+              {burnRiskData.total}
+            </div>
+            {burnRiskData.total > 0 ? (
+              <div className="text-xs space-y-0.5 mt-1">
+                {burnRiskData.critical > 0 && <div className="text-red-600">🔥🔥🔥 {burnRiskData.critical} critical</div>}
+                {burnRiskData.high > 0 && <div className="text-orange-600">🔥🔥 {burnRiskData.high} high</div>}
+                {burnRiskData.moderate > 0 && <div className="text-yellow-600">🔥 {burnRiskData.moderate} moderate</div>}
+              </div>
+            ) : (
+              <div className="text-xs text-green-600 mt-1">All accounts healthy!</div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Trend Summary Card */}
-        <Card className="col-span-2 lg:col-span-1 bg-gradient-to-br from-indigo-50 to-indigo-100 border-indigo-200 hover:shadow-lg transition-shadow">
+        <Card className="col-span-1 bg-gradient-to-br from-indigo-50 to-indigo-100 border-indigo-200 hover:shadow-lg transition-shadow">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-2xl">📊</span>
-              <span className="text-xs text-indigo-600 uppercase tracking-wide font-medium">Trend Summary</span>
+              <span className="text-xs text-indigo-600 uppercase tracking-wide font-medium">Trends</span>
             </div>
-            <div className="text-sm space-y-1">
+            <div className="text-xs space-y-1">
               <div className="flex justify-between">
                 <span className="text-red-600">🔴 Declining</span>
                 <span className="font-bold">{summaryStats.declining}</span>
@@ -1905,6 +2096,7 @@ function EmailsPageContent() {
                     />
                   </th>
                   <th className="text-left p-4 font-medium text-sm text-gray-600">📧 Email</th>
+                  <th className="text-center p-4 font-medium text-sm text-gray-600">🔥 Burn Risk</th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">Health</th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">Trend</th>
                   <th className="text-center p-4 font-medium text-sm text-gray-600">
@@ -1972,12 +2164,19 @@ function EmailsPageContent() {
                   const hasSignificantDrop = periodChange !== undefined && periodChange < -20;
                   const hasWarningDrop = periodChange !== undefined && periodChange >= -20 && periodChange < -10;
                   const hasImproved = periodChange !== undefined && periodChange > 10;
+                  
+                  // 🔥 Calculate burn risk for this account
+                  const burnRisk = calculateBurnRisk(warmupStats);
+                  const burnRiskClasses = getBurnRiskClasses(burnRisk.level);
 
                   return (
                     <tr
                       key={email.id}
                       className={`border-b cursor-pointer transition-all ${
                         isSelected ? "bg-blue-50" :
+                        burnRisk.level === 'critical' ? "bg-red-200 hover:bg-red-300" :
+                        burnRisk.level === 'high' ? "bg-orange-100 hover:bg-orange-200" :
+                        burnRisk.level === 'moderate' ? "bg-yellow-100 hover:bg-yellow-200" :
                         hasSignificantDrop ? "bg-red-100 hover:bg-red-200" :
                         hasWarningDrop ? "bg-yellow-50 hover:bg-yellow-100" :
                         health === "declining" ? "bg-red-50 hover:bg-red-100" :
@@ -1994,12 +2193,26 @@ function EmailsPageContent() {
                       </td>
                       <td className="p-4">
                         <div className="flex items-center gap-2">
+                          {/* 🔥 Burn Risk Indicator */}
+                          {burnRisk.level !== 'low' && (
+                            <span className="text-xl" title={`${burnRisk.level.toUpperCase()} RISK: ${burnRisk.score}/100`}>
+                              {burnRisk.emoji}
+                            </span>
+                          )}
                           <div>
-                            <div className="font-medium">{email.email}</div>
+                            <div className="font-medium flex items-center gap-2">
+                              {email.email}
+                              {/* 🔥 Burn Risk Badge */}
+                              {burnRisk.level !== 'low' && (
+                                <span className={`px-2 py-0.5 rounded text-xs font-bold text-white ${burnRiskClasses.badge}`}>
+                                  {burnRisk.score}
+                                </span>
+                              )}
+                            </div>
                             <div className="text-xs text-gray-500">{email.name}</div>
                           </div>
-                          {/* Period change badge */}
-                          {periodChange !== undefined && Math.abs(periodChange) > 10 && (
+                          {/* Period change badge (only show if not at burn risk) */}
+                          {burnRisk.level === 'low' && periodChange !== undefined && Math.abs(periodChange) > 10 && (
                             <Badge 
                               variant={hasSignificantDrop || hasWarningDrop ? "destructive" : "default"}
                               className={`text-xs whitespace-nowrap ${hasImproved ? 'bg-green-600' : ''}`}
@@ -2008,6 +2221,20 @@ function EmailsPageContent() {
                             </Badge>
                           )}
                         </div>
+                      </td>
+                      <td className="p-4 text-center">
+                        {/* 🔥 Burn Risk Column */}
+                        {burnRisk.level !== 'low' ? (
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="text-xl">{burnRisk.emoji}</span>
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded text-white ${burnRiskClasses.badge}`}>
+                              {burnRisk.score}/100
+                            </span>
+                            <span className={`text-xs ${burnRiskClasses.text}`}>{burnRisk.level}</span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 text-lg">✅</span>
+                        )}
                       </td>
                       <td className="p-4 text-center">
                         <TrendHealthIndicator warmup={warmupStats} />
