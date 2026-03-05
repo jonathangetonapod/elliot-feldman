@@ -21,6 +21,15 @@ interface ConnectionError {
   emailGuard: string | null;
 }
 
+interface SyncResult {
+  total_bison_domains: number;
+  existing_emailguard_domains: number;
+  newly_added: string[];
+  errors: { domain: string; error: string }[];
+}
+
+type SyncStatus = "idle" | "syncing" | "success" | "error";
+
 export default function SettingsPage() {
   const [config, setConfig] = useState<ApiKeyConfig>({
     bisonApiKey: "",
@@ -37,6 +46,9 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [showBisonKey, setShowBisonKey] = useState(false);
   const [showEmailGuardKey, setShowEmailGuardKey] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
+  const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   // Load from localStorage on mount
   useEffect(() => {
@@ -142,6 +154,41 @@ export default function SettingsPage() {
         ...e, 
         emailGuard: err instanceof Error ? err.message : "Connection failed" 
       }));
+    }
+  };
+
+  const syncDomains = async () => {
+    if (!config.bisonApiKey || !config.emailGuardApiKey) {
+      setSyncError("Both Bison and EmailGuard API keys are required");
+      setSyncStatus("error");
+      return;
+    }
+    
+    setSyncStatus("syncing");
+    setSyncError(null);
+    setSyncResult(null);
+    
+    try {
+      const response = await fetch('/api/sync-domains', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Bison-Api-Key': config.bisonApiKey,
+          'X-EmailGuard-Api-Key': config.emailGuardApiKey,
+        },
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || errorData.details || `HTTP ${response.status}`);
+      }
+      
+      const result: SyncResult = await response.json();
+      setSyncResult(result);
+      setSyncStatus("success");
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "Sync failed");
+      setSyncStatus("error");
     }
   };
 
@@ -252,6 +299,62 @@ export default function SettingsPage() {
             >
               {status.emailGuard === "testing" ? "Testing..." : "Test Connection"}
             </Button>
+          </CardContent>
+        </Card>
+
+        {/* Domain Sync */}
+        <Card>
+          <CardHeader className="pb-2 lg:pb-4">
+            <CardTitle className="text-base lg:text-lg">Sync Domains</CardTitle>
+            <p className="text-xs lg:text-sm text-gray-500 mt-1">
+              Automatically sync sender domains from Bison to EmailGuard for monitoring
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3 lg:space-y-4">
+            <Button 
+              onClick={syncDomains}
+              variant="outline"
+              size="sm"
+              disabled={syncStatus === "syncing" || !config.bisonApiKey || !config.emailGuardApiKey}
+              className="w-full sm:w-auto"
+            >
+              {syncStatus === "syncing" ? "Syncing..." : "Sync Domains from Bison"}
+            </Button>
+            
+            {syncStatus === "success" && syncResult && (
+              <div className="p-3 bg-green-50 border border-green-200 rounded-md">
+                <p className="text-sm text-green-800 font-medium">
+                  {syncResult.newly_added.length > 0 
+                    ? `✅ Added ${syncResult.newly_added.length} new domain${syncResult.newly_added.length !== 1 ? 's' : ''}`
+                    : "✅ All domains already synced"}
+                </p>
+                <p className="text-xs text-green-700 mt-1">
+                  {syncResult.total_bison_domains} domains in Bison • {syncResult.existing_emailguard_domains + syncResult.newly_added.length} in EmailGuard
+                </p>
+                {syncResult.newly_added.length > 0 && (
+                  <p className="text-xs text-green-600 mt-1 truncate" title={syncResult.newly_added.join(', ')}>
+                    New: {syncResult.newly_added.slice(0, 5).join(', ')}{syncResult.newly_added.length > 5 ? '...' : ''}
+                  </p>
+                )}
+                {syncResult.errors.length > 0 && (
+                  <p className="text-xs text-yellow-700 mt-1">
+                    ⚠️ {syncResult.errors.length} domain{syncResult.errors.length !== 1 ? 's' : ''} failed to add
+                  </p>
+                )}
+              </div>
+            )}
+            
+            {syncStatus === "error" && syncError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-md">
+                <p className="text-sm text-red-800">❌ {syncError}</p>
+              </div>
+            )}
+            
+            {(!config.bisonApiKey || !config.emailGuardApiKey) && (
+              <p className="text-xs text-gray-500">
+                Configure both API keys above to enable domain sync
+              </p>
+            )}
           </CardContent>
         </Card>
 

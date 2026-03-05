@@ -9,6 +9,15 @@ import { getMockDomainHealth, DomainHealth } from "@/lib/mock-data";
 
 type DataMode = "live" | "demo";
 
+interface SyncResult {
+  total_bison_domains: number;
+  existing_emailguard_domains: number;
+  newly_added: string[];
+  errors: { domain: string; error: string }[];
+}
+
+type SyncStatus = "idle" | "syncing" | "success" | "error";
+
 export default function DomainsPage() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "issues">("all");
@@ -16,6 +25,9 @@ export default function DomainsPage() {
   const [dataMode, setDataMode] = useState<DataMode>("demo");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
+  const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   // Fetch domains from EmailGuard API or fall back to mock data
   const fetchDomains = useCallback(async () => {
@@ -91,6 +103,64 @@ export default function DomainsPage() {
   useEffect(() => {
     fetchDomains();
   }, [fetchDomains]);
+
+  // Sync domains from Bison to EmailGuard
+  const syncDomains = async () => {
+    // Get API keys from localStorage
+    const storedConfig = localStorage.getItem("elliot-feldman-config");
+    if (!storedConfig) {
+      setSyncError("Please configure API keys in Settings first");
+      setSyncStatus("error");
+      return;
+    }
+    
+    let config: { bisonApiKey?: string; emailGuardApiKey?: string };
+    try {
+      config = JSON.parse(storedConfig);
+    } catch {
+      setSyncError("Invalid config in localStorage");
+      setSyncStatus("error");
+      return;
+    }
+    
+    if (!config.bisonApiKey || !config.emailGuardApiKey) {
+      setSyncError("Both Bison and EmailGuard API keys are required. Configure in Settings.");
+      setSyncStatus("error");
+      return;
+    }
+    
+    setSyncStatus("syncing");
+    setSyncError(null);
+    setSyncResult(null);
+    
+    try {
+      const response = await fetch('/api/sync-domains', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Bison-Api-Key': config.bisonApiKey,
+          'X-EmailGuard-Api-Key': config.emailGuardApiKey,
+        },
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || errorData.details || `HTTP ${response.status}`);
+      }
+      
+      const result: SyncResult = await response.json();
+      setSyncResult(result);
+      setSyncStatus("success");
+      
+      // Refresh domains list if new domains were added
+      if (result.newly_added.length > 0) {
+        fetchDomains();
+      }
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "Sync failed");
+      setSyncStatus("error");
+    }
+  };
   
   const domains = allDomains.filter(d => {
     if (search && !d.domain.toLowerCase().includes(search.toLowerCase())) {
@@ -128,20 +198,82 @@ export default function DomainsPage() {
             )}
           </p>
         </div>
-        <Button 
-          onClick={fetchDomains} 
-          variant="outline" 
-          size="sm"
-          disabled={loading}
-        >
-          {loading ? "Refreshing..." : "Refresh"}
-        </Button>
+        <div className="flex gap-2">
+          <Button 
+            onClick={syncDomains}
+            variant="outline"
+            size="sm"
+            disabled={syncStatus === "syncing"}
+          >
+            {syncStatus === "syncing" ? "Syncing..." : "Sync from Bison"}
+          </Button>
+          <Button 
+            onClick={fetchDomains} 
+            variant="outline" 
+            size="sm"
+            disabled={loading}
+          >
+            {loading ? "Refreshing..." : "Refresh"}
+          </Button>
+        </div>
       </div>
 
       {error && (
         <Card className="mb-4 bg-red-50 border-red-200">
           <CardContent className="pt-4 text-red-700 text-sm">
             {error}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Sync Status */}
+      {syncStatus === "success" && syncResult && (
+        <Card className="mb-4 bg-green-50 border-green-200">
+          <CardContent className="pt-4">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-sm text-green-800 font-medium">
+                  {syncResult.newly_added.length > 0 
+                    ? `✅ Added ${syncResult.newly_added.length} new domain${syncResult.newly_added.length !== 1 ? 's' : ''}`
+                    : "✅ All domains already synced"}
+                </p>
+                <p className="text-xs text-green-700 mt-1">
+                  {syncResult.total_bison_domains} domains in Bison • {syncResult.existing_emailguard_domains + syncResult.newly_added.length} in EmailGuard
+                </p>
+                {syncResult.newly_added.length > 0 && (
+                  <p className="text-xs text-green-600 mt-1">
+                    New: {syncResult.newly_added.slice(0, 5).join(', ')}{syncResult.newly_added.length > 5 ? ` +${syncResult.newly_added.length - 5} more` : ''}
+                  </p>
+                )}
+                {syncResult.errors.length > 0 && (
+                  <p className="text-xs text-yellow-700 mt-1">
+                    ⚠️ {syncResult.errors.length} domain{syncResult.errors.length !== 1 ? 's' : ''} failed to add
+                  </p>
+                )}
+              </div>
+              <button 
+                onClick={() => setSyncStatus("idle")} 
+                className="text-green-600 hover:text-green-800 text-sm"
+              >
+                ✕
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {syncStatus === "error" && syncError && (
+        <Card className="mb-4 bg-red-50 border-red-200">
+          <CardContent className="pt-4">
+            <div className="flex justify-between items-start">
+              <p className="text-sm text-red-800">❌ Sync failed: {syncError}</p>
+              <button 
+                onClick={() => setSyncStatus("idle")} 
+                className="text-red-600 hover:text-red-800 text-sm"
+              >
+                ✕
+              </button>
+            </div>
           </CardContent>
         </Card>
       )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -107,7 +107,7 @@ function hashCode(str: string): number {
   return hash;
 }
 
-export default function EmailsPage() {
+function EmailsPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   
@@ -560,5 +560,34 @@ export default function EmailsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Loading fallback for Suspense
+function EmailsPageLoading() {
+  return (
+    <div className="p-4 lg:p-8">
+      <div className="mb-6 lg:mb-8">
+        <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Email Accounts</h1>
+        <p className="text-gray-500 mt-1 text-sm lg:text-base">Loading sender emails...</p>
+      </div>
+      <Card>
+        <CardContent className="p-8">
+          <div className="flex items-center justify-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+            <span className="ml-3 text-gray-600">Fetching email accounts...</span>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// Wrapper component with Suspense boundary for useSearchParams
+export default function EmailsPage() {
+  return (
+    <Suspense fallback={<EmailsPageLoading />}>
+      <EmailsPageContent />
+    </Suspense>
   );
 }
