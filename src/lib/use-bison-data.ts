@@ -31,6 +31,9 @@ interface BisonSenderEmail {
   daily_limit?: number;
   warmup_enabled?: boolean;
   created_at?: string;
+  // Reply tracking fields from Bison API
+  unique_replied_count?: number;
+  total_replied_count?: number;
 }
 
 interface BisonWorkspaceStats {
@@ -71,21 +74,25 @@ function transformSenderEmail(bisonEmail: BisonSenderEmail): SenderEmail {
   const email = bisonEmail.email || '';
   const domain = bisonEmail.domain || extractDomain(email);
   
-  // Calculate reply rate from totals if not provided
-  let replyRate = bisonEmail.replyRate ?? 0;
-  const totalSent = bisonEmail.totalSent || bisonEmail.emails_sent_count || 0;
-  if (!bisonEmail.replyRate && totalSent > 0 && bisonEmail.totalReplies !== undefined) {
-    replyRate = ((bisonEmail.totalReplies || 0) / totalSent) * 100;
-  }
-  // If we have no reply rate data, use a reasonable default
-  // - Emails that have sent volume are likely working fine (assume 2% healthy)
-  // - New emails with no volume get warning status (1.5%)
-  if (replyRate === 0) {
-    replyRate = totalSent > 0 ? 2.0 : 1.5;
+  // Get total sent from Bison API
+  const totalSent = bisonEmail.emails_sent_count || bisonEmail.totalSent || 0;
+  
+  // Get replies from Bison API - prefer unique_replied_count
+  const totalReplies = bisonEmail.unique_replied_count ?? bisonEmail.total_replied_count ?? bisonEmail.totalReplies ?? 0;
+  
+  // Calculate reply rate from actual data: (replies / sent) * 100
+  let replyRate = 0;
+  if (totalSent > 0) {
+    replyRate = (totalReplies / totalSent) * 100;
   }
   
   // Always calculate health status from reply rate - don't use API's connection status field
   const status = calculateHealthStatus(replyRate);
+  
+  // Determine warmup status from warmup_enabled boolean (not warmupStatus string)
+  // warmup_enabled: true = actively warming = 'warming'
+  // warmup_enabled: false = warmup off = 'ready'
+  const warmupStatus: 'warming' | 'ready' | 'paused' = bisonEmail.warmup_enabled === true ? 'warming' : 'ready';
   
   const warmupReadyDate = new Date();
   warmupReadyDate.setDate(warmupReadyDate.getDate() + (30 - (bisonEmail.warmupDay || 30)));
@@ -96,15 +103,15 @@ function transformSenderEmail(bisonEmail: BisonSenderEmail): SenderEmail {
     name: bisonEmail.name || `${bisonEmail.firstName || ''} ${bisonEmail.lastName || ''}`.trim() || email.split('@')[0],
     domain,
     status,
-    warmupStatus: (bisonEmail.warmupStatus as 'warming' | 'ready' | 'paused') || 'ready',
+    warmupStatus,
     warmupDay: bisonEmail.warmupDay || 30,
     warmupReadyDate: warmupReadyDate.toISOString().split('T')[0],
     dailyLimit: bisonEmail.dailyLimit || bisonEmail.daily_limit || 50,
     currentVolume: bisonEmail.currentVolume || bisonEmail.emails_sent_today || 0,
     replyRate: Math.round(replyRate * 100) / 100,
     avgReplyRate: bisonEmail.avgReplyRate || 2.2,
-    sentLast7Days: bisonEmail.sentLast7Days || bisonEmail.emails_sent_count || bisonEmail.totalSent || 0,
-    repliesLast7Days: bisonEmail.repliesLast7Days || bisonEmail.totalReplies || 0,
+    sentLast7Days: totalSent,
+    repliesLast7Days: totalReplies,
     lastSyncedAt: bisonEmail.lastSyncedAt || new Date().toISOString(),
   };
 }
