@@ -324,6 +324,60 @@ export default function EmailsPage() {
         </p>
       </div>
 
+      {/* Quick Filter Buttons */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <button
+          onClick={() => handleQuickFilter("all")}
+          className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+            activeQuickFilter === "all"
+              ? "bg-gray-900 text-white"
+              : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+          }`}
+        >
+          All ({filterCounts.all})
+        </button>
+        <button
+          onClick={() => handleQuickFilter("burned")}
+          className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+            activeQuickFilter === "burned"
+              ? "bg-red-600 text-white"
+              : "bg-red-100 text-red-700 hover:bg-red-200"
+          }`}
+        >
+          🔴 Burned ({filterCounts.burned})
+        </button>
+        <button
+          onClick={() => handleQuickFilter("warning")}
+          className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+            activeQuickFilter === "warning"
+              ? "bg-yellow-500 text-white"
+              : "bg-yellow-100 text-yellow-700 hover:bg-yellow-200"
+          }`}
+        >
+          🟡 Warning ({filterCounts.warning})
+        </button>
+        <button
+          onClick={() => handleQuickFilter("warming")}
+          className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+            activeQuickFilter === "warming"
+              ? "bg-orange-500 text-white"
+              : "bg-orange-100 text-orange-700 hover:bg-orange-200"
+          }`}
+        >
+          🔥 Warming ({filterCounts.warming})
+        </button>
+        <button
+          onClick={() => handleQuickFilter("ready")}
+          className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+            activeQuickFilter === "ready"
+              ? "bg-green-600 text-white"
+              : "bg-green-100 text-green-700 hover:bg-green-200"
+          }`}
+        >
+          ✅ Ready ({filterCounts.ready})
+        </button>
+      </div>
+
       {/* Filters */}
       <Card className="mb-4 lg:mb-6">
         <CardContent className="pt-4 lg:pt-6 px-4 lg:px-6">
@@ -335,6 +389,7 @@ export default function EmailsPage() {
                 onChange={(e) => {
                   setSearch(e.target.value);
                   setPage(1);
+                  updateURL(statusFilter, warmupFilter, e.target.value);
                 }}
                 className="text-sm"
               />
@@ -344,8 +399,10 @@ export default function EmailsPage() {
                 className="flex-1 lg:flex-none px-3 py-2 border rounded-md text-sm"
                 value={statusFilter}
                 onChange={(e) => {
-                  setStatusFilter(e.target.value as EmailStatus | "all");
+                  const newStatus = e.target.value as EmailStatus | "all";
+                  setStatusFilter(newStatus);
                   setPage(1);
+                  updateURL(newStatus, warmupFilter, search);
                 }}
               >
                 <option value="all">All Status</option>
@@ -357,8 +414,10 @@ export default function EmailsPage() {
                 className="flex-1 lg:flex-none px-3 py-2 border rounded-md text-sm"
                 value={warmupFilter}
                 onChange={(e) => {
-                  setWarmupFilter(e.target.value as WarmupStatus | "all");
+                  const newWarmup = e.target.value as WarmupStatus | "all";
+                  setWarmupFilter(newWarmup);
                   setPage(1);
+                  updateURL(statusFilter, newWarmup, search);
                 }}
               >
                 <option value="all">All Warmup</option>
