@@ -1,36 +1,95 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Elliot Feldman - Email Health Monitor
+
+Monitor email infrastructure health at scale. Built for high-volume cold email operations.
+
+## Features
+
+### 📊 Dashboard
+- Real-time health overview of all sender emails
+- Health distribution (healthy/warning/burned)
+- Warmup status tracking
+- Average reply rate monitoring
+- Flagged domains alerts
+- Recent issues feed
+
+### 📧 Email Accounts
+- Monitor 5,000+ sender emails
+- Search and filter by status, warmup, domain
+- Track reply rates vs average
+- Identify burned accounts automatically
+- Paginated view for scale
+
+### 🌐 Domain Health
+- SPF/DKIM/DMARC validation status
+- Blacklist monitoring
+- Spam score tracking
+- Inbox placement rates
+- Per-domain email breakdown
+
+### 📅 Warmup Calendar
+- Visual 30-day warmup schedule
+- Track daily sending capacity progression
+- Upcoming ready dates timeline
+- Rotation planning
+
+## Tech Stack
+
+- **Frontend:** Next.js 16, React, TypeScript
+- **Styling:** Tailwind CSS, shadcn/ui
+- **Hosting:** Railway
+
+## Data Sources (planned)
+
+- **Bison (LeadGenJay):** Email accounts, warmup status, reply rates
+- **EmailGuard:** Spam scores, blacklist checks, inbox placement tests
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+# Install dependencies
+npm install
+
+# Run development server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+
+# Open http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Environment Variables
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```env
+# Bison API (LeadGenJay)
+BISON_API_KEY=your_api_key
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+# EmailGuard API
+EMAILGUARD_API_KEY=your_api_key
+```
 
-## Learn More
+## Architecture
 
-To learn more about Next.js, take a look at the following resources:
+```
+src/
+├── app/
+│   ├── page.tsx          # Dashboard
+│   ├── emails/page.tsx   # Email accounts list
+│   ├── domains/page.tsx  # Domain health
+│   └── warmup/page.tsx   # Warmup calendar
+├── components/
+│   ├── sidebar.tsx       # Navigation
+│   └── ui/               # shadcn components
+└── lib/
+    └── mock-data.ts      # Mock data generator (5k emails)
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Roadmap
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- [ ] Connect Bison API for real email data
+- [ ] Connect EmailGuard API for domain health
+- [ ] Hourly sync background jobs
+- [ ] Email alerts for burned accounts
+- [ ] Historical trend charts
+- [ ] Export functionality
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Built for Elliot Feldman by LeadGenJay 🦾
