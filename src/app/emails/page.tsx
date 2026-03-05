@@ -1007,15 +1007,37 @@ function EmailsPageContent() {
     }> = [];
     
     // Get accounts with declining or warning status from warmup API
-    warmupStatsMap.forEach((warmup, emailKey) => {
+    const today = new Date();
+    const periodDays = selectedTimePeriod;
+    const baselineEndDate = new Date(today);
+    baselineEndDate.setDate(baselineEndDate.getDate() - periodDays);
+    
+    warmupStatsMap.forEach((warmup) => {
       if (warmup.health === 'declining' || warmup.health === 'warning') {
+        const currentRate = warmup.current.warmup_reply_rate ?? 0;
+        const baselineRate = warmup.baseline?.warmup_reply_rate ?? currentRate;
+        const percentChange = warmup.changes.warmup_reply_rate ?? 0;
+        
+        // Create two data points: baseline and current
+        const replyRates: { date: string; rate: number }[] = [];
+        if (warmup.baseline) {
+          replyRates.push({
+            date: baselineEndDate.toISOString().split('T')[0],
+            rate: Math.round(baselineRate * 100) / 100,
+          });
+        }
+        replyRates.push({
+          date: today.toISOString().split('T')[0],
+          rate: Math.round(currentRate * 100) / 100,
+        });
+        
         declining.push({
           accountId: warmup.id,
           email: warmup.email,
-          replyRates: [], // Would need daily breakdown from API
-          currentAvg: warmup.current.warmup_score,
-          baselineAvg: warmup.baseline?.warmup_score ?? warmup.current.warmup_score,
-          percentChange: warmup.changes.warmup_score,
+          replyRates,
+          currentAvg: Math.round(currentRate * 100) / 100,
+          baselineAvg: Math.round(baselineRate * 100) / 100,
+          percentChange: Math.round(percentChange),
           health: warmup.health,
         });
       }
@@ -1033,7 +1055,67 @@ function EmailsPageContent() {
     return declining
       .sort((a, b) => a.percentChange - b.percentChange)
       .slice(0, 5);
-  }, [warmupStatsMap, usingMockData]);
+  }, [warmupStatsMap, usingMockData, selectedTimePeriod]);
+
+  // Generate trend data from warmup API data for the OverallTrendChart
+  // Shows current period vs baseline period reply rates as two data points
+  const overallTrendData = useMemo(() => {
+    if (warmupStatsMap.size === 0) return [];
+    
+    // Calculate overall average warmup reply rate for current and baseline periods
+    let currentTotal = 0;
+    let baselineTotal = 0;
+    let currentCount = 0;
+    let baselineCount = 0;
+    
+    warmupStatsMap.forEach((warmup) => {
+      const currentRate = warmup.current.warmup_reply_rate ?? 0;
+      const baselineRate = warmup.baseline?.warmup_reply_rate ?? null;
+      
+      if (currentRate > 0 || warmup.current.warmup_emails_sent > 0) {
+        currentTotal += currentRate;
+        currentCount++;
+      }
+      
+      if (baselineRate !== null && (baselineRate > 0 || (warmup.baseline?.warmup_emails_sent ?? 0) > 0)) {
+        baselineTotal += baselineRate;
+        baselineCount++;
+      }
+    });
+    
+    const currentAvg = currentCount > 0 ? currentTotal / currentCount : 0;
+    const baselineAvg = baselineCount > 0 ? baselineTotal / baselineCount : currentAvg;
+    
+    // Create two data points: baseline (previous period) and current
+    const today = new Date();
+    const periodDays = selectedTimePeriod;
+    
+    // Baseline period end date (start of current period)
+    const baselineEnd = new Date(today);
+    baselineEnd.setDate(baselineEnd.getDate() - periodDays);
+    
+    // Baseline period start date
+    const baselineStart = new Date(baselineEnd);
+    baselineStart.setDate(baselineStart.getDate() - periodDays);
+    
+    const trendData: { date: string; avgRate: number }[] = [];
+    
+    // Add baseline point (labeled as "Previous")
+    if (baselineCount > 0) {
+      trendData.push({
+        date: baselineEnd.toISOString().split('T')[0],
+        avgRate: Math.round(baselineAvg * 100) / 100,
+      });
+    }
+    
+    // Add current point
+    trendData.push({
+      date: today.toISOString().split('T')[0],
+      avgRate: Math.round(currentAvg * 100) / 100,
+    });
+    
+    return trendData;
+  }, [warmupStatsMap, selectedTimePeriod]);
 
   // Calculate counts for quick filters - using Bison warmup API data
   const filterCounts = useMemo(() => {
@@ -1528,10 +1610,16 @@ function EmailsPageContent() {
           <>
             {/* Overall Reply Rate Trend - Full Width with Date Picker */}
             <OverallTrendChart 
-              data={usingMockData ? generateMockTrendData(60) : []} 
+              data={usingMockData ? generateMockTrendData(60) : overallTrendData} 
               loading={loading || warmupLoading}
               dateRange={trendDateRange}
-              onDateRangeChange={setTrendDateRange}
+              onDateRangeChange={(range) => {
+                setTrendDateRange(range);
+                // Sync date picker with warmup API period
+                if (range.preset === '7d') setSelectedTimePeriod(7);
+                else if (range.preset === '14d') setSelectedTimePeriod(14);
+                else if (range.preset === '30d') setSelectedTimePeriod(30);
+              }}
               showDatePicker={true}
             />
 
@@ -1541,7 +1629,13 @@ function EmailsPageContent() {
                 accounts={topDecliningAccounts}
                 title="Top Declining Accounts"
                 dateRange={trendDateRange}
-                onDateRangeChange={setTrendDateRange}
+                onDateRangeChange={(range) => {
+                  setTrendDateRange(range);
+                  // Sync date picker with warmup API period
+                  if (range.preset === '7d') setSelectedTimePeriod(7);
+                  else if (range.preset === '14d') setSelectedTimePeriod(14);
+                  else if (range.preset === '30d') setSelectedTimePeriod(30);
+                }}
                 showDatePicker={true}
                 loading={warmupLoading}
               />
