@@ -16,7 +16,8 @@ interface BisonSenderEmail {
   warmup_enabled: boolean;
   warmup_limit: number;
   daily_limit: number;
-  emails_sent_today: number;
+  emails_sent_today?: number;
+  emails_sent_count?: number;
   created_at: string;
 }
 
@@ -70,8 +71,10 @@ function transformBisonEmail(bisonEmail: BisonSenderEmail): SenderEmail {
     status = "burned";
   }
   
-  // Simulate 7-day stats
-  const sentLast7Days = bisonEmail.emails_sent_today * 7;
+  // Calculate 7-day stats from available data
+  // Use emails_sent_count (total) if available, otherwise fallback to daily * 7
+  const sentLast7Days = bisonEmail.emails_sent_count ?? 
+    (bisonEmail.emails_sent_today ? bisonEmail.emails_sent_today * 7 : 0);
   const repliesLast7Days = Math.round(sentLast7Days * (replyRate / 100));
   
   return {
