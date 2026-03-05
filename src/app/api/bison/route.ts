@@ -196,6 +196,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Block warmup enable/disable endpoints - app is read-only for warmup status
+  if (endpoint.includes('warmup/enable') || endpoint.includes('warmup/disable')) {
+    return NextResponse.json(
+      { error: 'Warmup control is disabled. This app is read-only for warmup status.' },
+      { status: 403 }
+    );
+  }
+
   try {
     const body = await request.json();
     const bisonUrl = `${BISON_BASE_URL}/${endpoint}`;

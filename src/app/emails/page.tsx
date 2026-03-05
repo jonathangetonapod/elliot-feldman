@@ -321,7 +321,6 @@ function EmailsPageContent() {
   
   // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [bulkActionLoading, setBulkActionLoading] = useState<string | null>(null);
   
   const pageSize = 25;
 
@@ -594,81 +593,6 @@ function EmailsPageContent() {
   const currentPageIds = emails.map(e => e.id);
   const allOnPageSelected = currentPageIds.length > 0 && currentPageIds.every(id => selectedIds.has(id));
   const someOnPageSelected = currentPageIds.some(id => selectedIds.has(id));
-
-  // Bulk action handlers
-  const handleEnableWarmup = useCallback(async () => {
-    if (selectedIds.size === 0) return;
-    
-    setBulkActionLoading("enable");
-    try {
-      const response = await fetch("/api/bison?endpoint=sender-emails/warmup/enable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sender_email_ids: Array.from(selectedIds) }),
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.details || error.error || "Failed to enable warmup");
-      }
-      
-      toast.success(`Warmup enabled for ${selectedIds.size} email(s)`);
-      
-      // Update local state
-      setApiEmails(prev => {
-        if (!prev) return prev;
-        return prev.map(email => {
-          if (selectedIds.has(email.id)) {
-            return { ...email, warmupEnabled: true, warmupStatus: "warming" as WarmupStatus };
-          }
-          return email;
-        });
-      });
-      
-      clearSelection();
-    } catch (error) {
-      toast.error(`Failed to enable warmup: ${error instanceof Error ? error.message : "Unknown error"}`);
-    } finally {
-      setBulkActionLoading(null);
-    }
-  }, [selectedIds, clearSelection]);
-
-  const handleDisableWarmup = useCallback(async () => {
-    if (selectedIds.size === 0) return;
-    
-    setBulkActionLoading("disable");
-    try {
-      const response = await fetch("/api/bison?endpoint=sender-emails/warmup/disable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sender_email_ids: Array.from(selectedIds) }),
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.details || error.error || "Failed to disable warmup");
-      }
-      
-      toast.success(`Warmup disabled for ${selectedIds.size} email(s)`);
-      
-      // Update local state
-      setApiEmails(prev => {
-        if (!prev) return prev;
-        return prev.map(email => {
-          if (selectedIds.has(email.id)) {
-            return { ...email, warmupEnabled: false, warmupStatus: "paused" as WarmupStatus };
-          }
-          return email;
-        });
-      });
-      
-      clearSelection();
-    } catch (error) {
-      toast.error(`Failed to disable warmup: ${error instanceof Error ? error.message : "Unknown error"}`);
-    } finally {
-      setBulkActionLoading(null);
-    }
-  }, [selectedIds, clearSelection]);
 
   const handleExportSelected = useCallback(() => {
     if (selectedIds.size === 0) return;
@@ -1252,43 +1176,9 @@ function EmailsPageContent() {
             
             <div className="flex flex-wrap items-center gap-2">
               <Button
-                variant="default"
-                size="sm"
-                onClick={handleEnableWarmup}
-                disabled={bulkActionLoading !== null}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                {bulkActionLoading === "enable" ? (
-                  <>
-                    <span className="animate-spin mr-2">⏳</span>
-                    Enabling...
-                  </>
-                ) : (
-                  "🔥 Enable Warmup"
-                )}
-              </Button>
-              
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleDisableWarmup}
-                disabled={bulkActionLoading !== null}
-              >
-                {bulkActionLoading === "disable" ? (
-                  <>
-                    <span className="animate-spin mr-2">⏳</span>
-                    Disabling...
-                  </>
-                ) : (
-                  "⏸️ Disable Warmup"
-                )}
-              </Button>
-              
-              <Button
                 variant="outline"
                 size="sm"
                 onClick={handleExportSelected}
-                disabled={bulkActionLoading !== null}
               >
                 📥 Export CSV
               </Button>
@@ -1297,7 +1187,6 @@ function EmailsPageContent() {
                 variant="ghost"
                 size="sm"
                 onClick={clearSelection}
-                disabled={bulkActionLoading !== null}
               >
                 ✕ Clear
               </Button>
