@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { generateMockEmails } from "@/lib/mock-data";
+import { InfoTooltip } from "@/components/info-tooltip";
 
 // Bison API sender type
 interface BisonSender {
@@ -231,6 +232,7 @@ export default function WarmupPage() {
           <div>
             <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Warmup Calendar</h1>
             <p className="text-gray-500 mt-1 text-sm lg:text-base">Track email warmup progress and readiness</p>
+            <p className="text-gray-500 mt-1 text-sm">New email accounts need a 30-day warmup period before sending at full volume. Bison gradually increases sending so email providers learn to trust the account.</p>
           </div>
           {usingMockData && (
             <Badge variant="outline" className="text-xs text-orange-600 border-orange-300">
@@ -245,13 +247,13 @@ export default function WarmupPage() {
         <Card>
           <CardContent className="pt-4 lg:pt-6 px-3 lg:px-6 pb-3 lg:pb-6">
             <div className="text-xl lg:text-2xl font-bold text-green-600">{stats.ready.toLocaleString()}</div>
-            <div className="text-xs lg:text-sm text-gray-500">Ready for Use</div>
+            <div className="text-xs lg:text-sm text-gray-500 flex items-center">Ready for Use<InfoTooltip text="These accounts have completed warmup and can send at full volume." /></div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4 lg:pt-6 px-3 lg:px-6 pb-3 lg:pb-6">
             <div className="text-xl lg:text-2xl font-bold text-orange-600">{stats.warming.toLocaleString()}</div>
-            <div className="text-xs lg:text-sm text-gray-500">Warming</div>
+            <div className="text-xs lg:text-sm text-gray-500 flex items-center">Warming<InfoTooltip text="These accounts are still building reputation. Don't send campaigns from them yet." /></div>
           </CardContent>
         </Card>
         <Card>
@@ -263,7 +265,7 @@ export default function WarmupPage() {
         <Card>
           <CardContent className="pt-4 lg:pt-6 px-3 lg:px-6 pb-3 lg:pb-6">
             <div className="text-xl lg:text-2xl font-bold text-gray-400">{stats.paused}</div>
-            <div className="text-xs lg:text-sm text-gray-500">Paused</div>
+            <div className="text-xs lg:text-sm text-gray-500 flex items-center">Paused<InfoTooltip text="Warmup is paused on these accounts — they are not building reputation while paused." /></div>
           </CardContent>
         </Card>
       </div>
@@ -271,7 +273,7 @@ export default function WarmupPage() {
       {/* Warmup Progress Visualization */}
       <Card className="mb-4 lg:mb-6">
         <CardHeader className="px-4 lg:px-6">
-          <CardTitle className="text-base lg:text-lg">30-Day Warmup Schedule</CardTitle>
+          <CardTitle className="text-base lg:text-lg flex items-center">30-Day Warmup Schedule<InfoTooltip text="Daily limits increase over 30 days: 5/day (Days 1-5) → 10/day (Days 6-10) → 20/day (Days 11-20) → 35/day (Days 21-29) → 50/day (Day 30+, ready for campaigns)." /></CardTitle>
         </CardHeader>
         <CardContent className="px-4 lg:px-6">
           <div className="space-y-3 lg:space-y-4">

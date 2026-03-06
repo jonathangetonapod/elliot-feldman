@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useBisonData } from "@/lib/use-bison-data";
 import { generateMockEmails, getMockDomainHealth } from "@/lib/mock-data";
 import { generateAlerts, getAlertCounts, getSeverityIcon, getSeverityClasses, Alert, AlertSeverity } from "@/lib/alerts";
+import { InfoTooltip } from "@/components/info-tooltip";
 
 type FilterType = 'all' | AlertSeverity;
 
@@ -111,6 +112,7 @@ export default function AlertsPage() {
               🔔 Alerts
             </h1>
             <p className="text-gray-500 mt-1 text-sm lg:text-base">Account health alerts and notifications</p>
+            <p className="text-gray-500 mt-1 text-sm">Alerts notify you when accounts or domains need attention. Resolve alerts after taking action.</p>
           </div>
           {/* Connection Status */}
           <div className="flex items-center gap-2">
@@ -260,6 +262,23 @@ export default function AlertsPage() {
                             {alert.entity}
                           </span>
                         </div>
+
+                        {/* Recommended Action */}
+                        {alert.type === 'reply_rate_critical' && (
+                          <p className="text-xs text-gray-500 mt-1 italic">Recommended: Pause sending from this account and investigate the domain.</p>
+                        )}
+                        {alert.type === 'reply_rate_warning' && (
+                          <p className="text-xs text-gray-500 mt-1 italic">Recommended: Monitor for a few more days. If it continues declining, consider pausing.</p>
+                        )}
+                        {alert.type === 'reply_rate_declining' && (
+                          <p className="text-xs text-gray-500 mt-1 italic">Recommended: Keep watching — this may stabilize on its own.</p>
+                        )}
+                        {alert.type === 'domain_blacklisted' && (
+                          <p className="text-xs text-gray-500 mt-1 italic">Recommended: Stop sending from this domain and request delisting.</p>
+                        )}
+                        {alert.type === 'warmup_complete' && (
+                          <p className="text-xs text-gray-500 mt-1 italic">Good news! This account is ready for full-volume sending.</p>
+                        )}
                       </div>
                       
                       {/* Actions */}
@@ -274,20 +293,22 @@ export default function AlertsPage() {
                             Unresolve
                           </Button>
                         ) : (
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
+                          <Button
+                            variant="outline"
+                            size="sm"
                             onClick={() => handleResolve(alert.id)}
                             className="text-xs border-green-300 text-green-700 hover:bg-green-50"
+                            title="Marks as handled — does not fix the underlying issue"
                           >
                             ✓ Resolve
                           </Button>
                         )}
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => handleDismiss(alert.id)}
                           className="text-xs text-gray-400 hover:text-gray-600"
+                          title="Hides this alert permanently"
                         >
                           Dismiss
                         </Button>

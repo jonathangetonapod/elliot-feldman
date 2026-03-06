@@ -18,7 +18,7 @@ import { NextRequest, NextResponse } from 'next/server';
  */
 
 const BISON_BASE_URL = 'https://send.leadgenjay.com/api';
-const PARALLEL_BATCH_SIZE = 10;
+const PARALLEL_BATCH_SIZE = 30; // 3k req/min limit — be aggressive
 
 interface WarmupSenderEmail {
   id: number;
@@ -243,24 +243,15 @@ export async function GET(request: NextRequest) {
     
     // Get comparison periods based on period type
     const periods = getComparisonPeriods(periodType);
-    
-    // Fetch current period
-    const currentData = await fetchAllWarmupStats(
-      apiKey, 
-      periods.current.start, 
-      periods.current.end
-    );
-    
-    // If compare mode, also fetch baseline period
-    let baselineData: { data: WarmupSenderEmail[], meta: any } | null = null;
-    if (compareMode) {
-      baselineData = await fetchAllWarmupStats(
-        apiKey,
-        periods.baseline.start,
-        periods.baseline.end
-      );
-    }
-    
+
+    // Fetch current + baseline in PARALLEL (biggest speed win)
+    const [currentData, baselineData] = await Promise.all([
+      fetchAllWarmupStats(apiKey, periods.current.start, periods.current.end),
+      compareMode
+        ? fetchAllWarmupStats(apiKey, periods.baseline.start, periods.baseline.end)
+        : Promise.resolve(null),
+    ]);
+
     const duration = Date.now() - startTime;
     console.log(`Fetched warmup stats (compare=${compareMode}) in ${duration}ms`);
     

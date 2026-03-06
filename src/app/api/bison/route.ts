@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
  */
 
 const BISON_BASE_URL = 'https://send.leadgenjay.com/api';
-const PARALLEL_BATCH_SIZE = 10; // Fetch 10 pages at once
+const PARALLEL_BATCH_SIZE = 30; // 3k req/min limit — be aggressive
 
 // Cache durations by endpoint (in seconds)
 const CACHE_DURATIONS: Record<string, { maxAge: number; staleWhileRevalidate: number }> = {

@@ -38,12 +38,13 @@ import {
   Sparkline as EnhancedSparkline,
 } from "@/components/trend-charts";
 import { AccountDetailModal, type AccountDetailData } from "@/components/account-detail-modal";
+import { InfoTooltip } from "@/components/info-tooltip";
 
 interface BisonSenderEmail {
   id: number;
   email: string;
   name: string;
-  status: "connected" | "disconnected";
+  status: string; // "Connected", "Disconnected", etc. from Bison API
   warmup_enabled: boolean;
   warmup_limit: number;
   daily_limit: number;
@@ -113,6 +114,7 @@ function transformBisonEmail(bisonEmail: BisonSenderEmail): DisplayEmail {
     totalReplies: uniqueReplies,
     createdAt: bisonEmail.created_at,
     daysActive: daysSinceCreation,
+    connectionStatus: bisonEmail.status?.toLowerCase() === 'connected' ? 'connected' : 'disconnected',
   };
 }
 
@@ -124,6 +126,7 @@ type DisplayEmail = SenderEmail & {
   createdAt?: string;
   daysActive?: number;
   trend?: AccountTrend | null;
+  connectionStatus?: "connected" | "disconnected";
 };
 
 // Health classification based on warmup score changes from Bison API
@@ -182,27 +185,27 @@ function calculateBurnRisk(warmup: WarmupAccountComparison | undefined): BurnRis
   // 🔥🔥🔥 Critical: Reply rate dropped >50% week over week
   if (replyRateChange <= -50) {
     riskScore += 50;
-    reasons.push(`Reply Rate: Was ${baselineReplyRate.toFixed(1)}% → Now ${currentReplyRate.toFixed(1)}% (↓${Math.abs(Math.round(replyRateChange))}%)`);
-    reasons.push(`This account's reply rate dropped drastically`);
+    reasons.push(`Warmup Reply Rate: Was ${baselineReplyRate.toFixed(1)}% → Now ${currentReplyRate.toFixed(1)}% (↓${Math.abs(Math.round(replyRateChange))}%)`);
+    reasons.push(`Warmup reply rate dropped drastically`);
   }
   // Risk factor 2: Reply rate dropped 30-50% - HIGH (+35)
   // 🔥🔥 High: Reply rate dropped 30-50% week over week
   else if (replyRateChange <= -30) {
     riskScore += 35;
-    reasons.push(`Reply Rate: Was ${baselineReplyRate.toFixed(1)}% → Now ${currentReplyRate.toFixed(1)}% (↓${Math.abs(Math.round(replyRateChange))}%)`);
-    reasons.push(`Reply rate declining significantly`);
+    reasons.push(`Warmup Reply Rate: Was ${baselineReplyRate.toFixed(1)}% → Now ${currentReplyRate.toFixed(1)}% (↓${Math.abs(Math.round(replyRateChange))}%)`);
+    reasons.push(`Warmup reply rate declining significantly`);
   }
   // Risk factor 3: Reply rate dropped 20-30% - MODERATE (+20)
   // 🔥 Moderate: Reply rate dropped 20-30% week over week  
   else if (replyRateChange <= -20) {
     riskScore += 20;
-    reasons.push(`Reply Rate: Was ${baselineReplyRate.toFixed(1)}% → Now ${currentReplyRate.toFixed(1)}% (↓${Math.abs(Math.round(replyRateChange))}%)`);
+    reasons.push(`Warmup Reply Rate: Was ${baselineReplyRate.toFixed(1)}% → Now ${currentReplyRate.toFixed(1)}% (↓${Math.abs(Math.round(replyRateChange))}%)`);
   }
 
   // Additional risk: Very low current reply rate (+20 if <1%)
   if (currentReplyRate < 1 && warmup.current.warmup_emails_sent > 10) {
     riskScore += 20;
-    reasons.push(`Current reply rate critically low (${currentReplyRate.toFixed(1)}%)`);
+    reasons.push(`Current warmup reply rate critically low (${currentReplyRate.toFixed(1)}%)`);
   }
 
   // Additional: Bounces increasing is a secondary indicator (+10)
@@ -859,10 +862,18 @@ function EmailsPageContent() {
     const warmupOn = allEmails.filter(e => (e as DisplayEmail).warmupEnabled !== false && e.warmupStatus !== "paused").length;
     const warmupOff = allEmails.filter(e => (e as DisplayEmail).warmupEnabled === false || e.warmupStatus === "paused").length;
 
-    // Calculate average reply rate (only for accounts with sends)
-    const emailsWithSends = allEmails.filter(e => e.sentLast7Days > 0 || (e as DisplayEmail).totalSent && (e as DisplayEmail).totalSent! > 0);
-    const avgReplyRate = emailsWithSends.length > 0
-      ? emailsWithSends.reduce((sum, e) => sum + e.replyRate, 0) / emailsWithSends.length
+    // Calculate average warmup reply rate from warmup API data
+    let totalWarmupReplyRate = 0;
+    let warmupReplyRateCount = 0;
+    for (const email of allEmails) {
+      const warmup = warmupStatsMap.get(email.email.toLowerCase());
+      if (warmup && warmup.current.warmup_emails_sent > 0) {
+        totalWarmupReplyRate += warmup.current.warmup_reply_rate;
+        warmupReplyRateCount++;
+      }
+    }
+    const avgReplyRate = warmupReplyRateCount > 0
+      ? Math.round((totalWarmupReplyRate / warmupReplyRateCount) * 100) / 100
       : 0;
 
     // Count by health status from Bison warmup API data
@@ -1002,9 +1013,13 @@ function EmailsPageContent() {
           bVal = b.totalSent || b.sentLast7Days;
           break;
         case "replyRate":
-        default:
-          aVal = a.replyRate;
-          bVal = b.replyRate;
+        default: {
+          // Sort by warmup reply rate from warmup API, fallback to 0
+          const aWarmup = warmupStatsMap.get(a.email.toLowerCase());
+          const bWarmup = warmupStatsMap.get(b.email.toLowerCase());
+          aVal = aWarmup?.current?.warmup_reply_rate ?? 0;
+          bVal = bWarmup?.current?.warmup_reply_rate ?? 0;
+        }
           break;
       }
       return sortOrder === "asc" ? aVal - bVal : bVal - aVal;
@@ -1066,23 +1081,8 @@ function EmailsPageContent() {
   const allOnPageSelected = currentPageIds.length > 0 && currentPageIds.every(id => selectedIds.has(id));
   const someOnPageSelected = currentPageIds.some(id => selectedIds.has(id));
 
-  // Open account detail modal - uses Bison warmup API data
+  // Open account detail modal
   const openAccountDetail = useCallback((email: DisplayEmail) => {
-    const warmup = warmupStatsMap.get(email.email.toLowerCase());
-    
-    // Convert warmup data to trendAnalysis format for the modal
-    const trendAnalysis = warmup ? {
-      accountId: warmup.id,
-      email: warmup.email,
-      health: getHealthFromWarmup(warmup),
-      currentAvg: warmup.current.warmup_score,
-      baselineAvg: warmup.baseline?.warmup_score ?? warmup.current.warmup_score,
-      percentChange: Math.round(warmup.changes.warmup_score),
-      daysOfData: 14, // We have data from Bison
-      trend: warmup.changes.warmup_score > 0 ? 'up' as const : warmup.changes.warmup_score < 0 ? 'down' as const : 'flat' as const,
-      replyRates: [],
-    } : null;
-    
     const accountData: AccountDetailData = {
       id: email.id,
       email: email.email,
@@ -1090,18 +1090,10 @@ function EmailsPageContent() {
       domain: email.domain,
       status: email.status,
       warmupEnabled: email.warmupEnabled !== false && email.warmupStatus !== "paused",
-      warmupStatus: email.warmupStatus,
-      warmupDay: email.warmupDay || 0,
       dailyLimit: email.dailyLimit,
-      currentVolume: email.currentVolume,
-      replyRate: email.replyRate,
       totalSent: email.totalSent || email.sentLast7Days,
       totalReplies: email.totalReplies || email.repliesLast7Days,
-      sentLast7Days: email.sentLast7Days,
-      repliesLast7Days: email.repliesLast7Days,
       createdAt: email.createdAt || new Date().toISOString(),
-      lastSyncedAt: email.lastSyncedAt,
-      trendAnalysis: trendAnalysis,
     };
     
     setSelectedAccountForDetail(accountData);
@@ -1120,7 +1112,7 @@ function EmailsPageContent() {
     const selectedEmails = allEmails.filter(e => selectedIds.has(e.id)) as DisplayEmail[];
 
     // Generate CSV using Bison warmup API data
-    const headers = ["Email", "Name", "Health", "Warmup", "Reply Rate", "Baseline Score", "Current Score", "% Change", "Daily Limit", "Total Sent", "Total Replies", "WU Bounces", "WU Replies"];
+    const headers = ["Email", "Name", "Health", "Warmup", "WU Reply Rate", "Baseline Score", "Current Score", "% Change", "Daily Limit", "Total Sent", "Total Replies", "WU Bounces", "WU Replies"];
     const rows = selectedEmails.map(e => {
       const warmup = warmupStatsMap.get(e.email.toLowerCase());
       const health = warmup ? getHealthLabel(getHealthFromWarmup(warmup)).label : "Unknown";
@@ -1129,7 +1121,7 @@ function EmailsPageContent() {
         e.name,
         health,
         e.warmupEnabled !== false ? "ON" : "OFF",
-        `${e.replyRate}%`,
+        `${warmup?.current?.warmup_reply_rate ?? 0}%`,
         warmup?.baseline?.warmup_score ?? "-",
         warmup?.current?.warmup_score ?? "-",
         warmup ? `${Math.round(warmup.changes.warmup_score)}%` : "-",
@@ -1160,8 +1152,8 @@ function EmailsPageContent() {
     return (
       <div className="p-4 lg:p-8">
         <div className="mb-6 lg:mb-8">
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">📧 Accounts</h1>
-          <p className="text-gray-500 mt-1 text-sm lg:text-base">Loading sender emails...</p>
+          <h1 className="text-2xl font-bold text-gray-900">Accounts</h1>
+          <p className="text-gray-500 mt-1 text-sm">Loading sender emails...</p>
         </div>
         <Card>
           <CardContent className="p-8">
@@ -1178,597 +1170,273 @@ function EmailsPageContent() {
   return (
     <div className="p-4 lg:p-8 pb-24 lg:pb-8">
       {/* Header */}
-      <div className="mb-6 lg:mb-8">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">📧 Accounts</h1>
-            <p className="text-gray-500 mt-1 text-sm lg:text-base">
-              Monitor account health and performance trends for {summaryStats.total.toLocaleString()} sender emails
-              {usingMockData && <span className="text-orange-500 ml-2">(Demo Mode)</span>}
-            </p>
-          </div>
-          <Badge variant="outline" className="text-xs w-fit">
-            📊 {selectedTimePeriod}-day comparison
-          </Badge>
-        </div>
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">Accounts</h1>
+        <p className="text-gray-500 mt-1 text-sm">
+          {summaryStats.total.toLocaleString()} sender emails — warmup reply rate shows how email providers treat each account.
+          {usingMockData && <span className="text-orange-500 ml-2">(Demo Mode)</span>}
+        </p>
       </div>
 
-      {/* Overview Summary - Trend Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-6">
-        {/* 🔥 BURN RISK Summary Card - PROMINENT */}
-        <Card className={`col-span-2 lg:col-span-1 hover:shadow-lg transition-shadow ${
-          burnRiskData.total > 0 
-            ? "bg-gradient-to-br from-red-100 to-orange-100 border-2 border-red-400" 
-            : "bg-gradient-to-br from-green-50 to-emerald-100 border-green-300"
+      {/* Overview — 3 key metrics */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        {/* Needs Attention */}
+        <Card className={`${
+          burnRiskData.total > 0
+            ? "border-l-4 border-l-red-500"
+            : "border-l-4 border-l-green-500"
         }`}>
           <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl">{burnRiskData.total > 0 ? '🔥' : '✅'}</span>
-              <span className={`text-xs uppercase tracking-wide font-bold ${
-                burnRiskData.total > 0 ? 'text-red-600' : 'text-green-600'
-              }`}>Burn Risk</span>
-            </div>
-            <div className={`text-3xl font-black ${burnRiskData.total > 0 ? 'text-red-600' : 'text-green-600'}`}>
+            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Needs Attention</div>
+            <div className={`text-3xl font-bold ${burnRiskData.total > 0 ? 'text-red-600' : 'text-green-600'}`}>
               {burnRiskData.total}
             </div>
-            {burnRiskData.total > 0 ? (
-              <div className="text-xs space-y-0.5 mt-1">
-                {burnRiskData.critical > 0 && <div className="text-red-600">🔥🔥🔥 {burnRiskData.critical} critical</div>}
-                {burnRiskData.high > 0 && <div className="text-orange-600">🔥🔥 {burnRiskData.high} high</div>}
-                {burnRiskData.moderate > 0 && <div className="text-yellow-600">🔥 {burnRiskData.moderate} moderate</div>}
-              </div>
-            ) : (
-              <div className="text-xs text-green-600 mt-1">All accounts healthy!</div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Trend Summary Card */}
-        <Card className="col-span-1 bg-gradient-to-br from-indigo-50 to-indigo-100 border-indigo-200 hover:shadow-lg transition-shadow">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl">📊</span>
-              <span className="text-xs text-indigo-600 uppercase tracking-wide font-medium">Trends</span>
-            </div>
-            <div className="text-xs space-y-1">
-              <div className="flex justify-between">
-                <span className="text-red-600">🔴 Declining</span>
-                <span className="font-bold">{summaryStats.declining}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-green-600">🟢 Stable</span>
-                <span className="font-bold">{summaryStats.stable}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-blue-600">📈 Improving</span>
-                <span className="font-bold">{summaryStats.improving}</span>
-              </div>
+            <div className="text-xs text-gray-500 mt-1">
+              {burnRiskData.total > 0
+                ? `${burnRiskData.critical} critical · ${burnRiskData.high} high · ${burnRiskData.moderate} moderate`
+                : "All accounts healthy"
+              }
             </div>
           </CardContent>
         </Card>
 
-        {/* Average Reply Rate Trend Card */}
-        <Card className="col-span-1 bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200 hover:shadow-lg transition-shadow">
+        {/* Avg Reply Rate */}
+        <Card className="border-l-4 border-l-blue-500">
           <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl">💬</span>
-              <span className="text-xs text-blue-600 uppercase tracking-wide font-medium">Avg Reply</span>
+            <div className="flex items-center gap-1 text-xs text-gray-500 uppercase tracking-wide mb-1">
+              Avg WU Reply Rate
+              <InfoTooltip text="Average warmup reply rate across all accounts. Healthy: 20-40%. Below 10%: concern." />
             </div>
-            <div className="text-2xl font-bold text-blue-600">
+            <div className="text-3xl font-bold text-blue-600">
               {summaryStats.avgReplyRate}%
             </div>
-            <div className="text-xs text-gray-400">across all accounts</div>
+            <div className="text-xs text-gray-500 mt-1">
+              Healthy range: 20-40%
+            </div>
           </CardContent>
         </Card>
 
-        {/* At Risk Card - using Bison warmup API data */}
-        <Card className={`col-span-1 hover:shadow-lg transition-shadow ${
-          droppedAccountsData.dropped.length === 0 ? "bg-gradient-to-br from-green-50 to-green-100 border-green-200" :
-          "bg-gradient-to-br from-red-50 to-red-100 border-red-200"
-        }`}>
+        {/* Account Health Breakdown */}
+        <Card className="border-l-4 border-l-gray-300">
           <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl">{droppedAccountsData.dropped.length === 0 ? "✅" : "⚠️"}</span>
-              <span className={`text-xs uppercase tracking-wide font-medium ${
-                droppedAccountsData.dropped.length === 0 ? "text-green-600" : "text-red-600"
-              }`}>At Risk</span>
+            <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Account Health</div>
+            <div className="flex items-center gap-3">
+              <div className="flex -space-x-0.5 flex-1 h-3 rounded-full overflow-hidden">
+                {summaryStats.declining > 0 && (
+                  <div className="bg-red-500 h-full" style={{ width: `${(summaryStats.declining / summaryStats.total) * 100}%` }} />
+                )}
+                {summaryStats.warning > 0 && (
+                  <div className="bg-yellow-400 h-full" style={{ width: `${(summaryStats.warning / summaryStats.total) * 100}%` }} />
+                )}
+                {summaryStats.stable > 0 && (
+                  <div className="bg-green-500 h-full" style={{ width: `${(summaryStats.stable / summaryStats.total) * 100}%` }} />
+                )}
+                {summaryStats.improving > 0 && (
+                  <div className="bg-blue-500 h-full" style={{ width: `${(summaryStats.improving / summaryStats.total) * 100}%` }} />
+                )}
+              </div>
             </div>
-            <div className={`text-2xl font-bold ${droppedAccountsData.dropped.length === 0 ? "text-green-600" : "text-red-600"}`}>
-              {droppedAccountsData.dropped.length}
+            <div className="flex gap-3 text-xs mt-2 text-gray-600 flex-wrap">
+              {summaryStats.declining > 0 && <span><span className="inline-block w-2 h-2 rounded-full bg-red-500 mr-1" />{summaryStats.declining} declining</span>}
+              {summaryStats.warning > 0 && <span><span className="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-1" />{summaryStats.warning} warning</span>}
+              <span><span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" />{summaryStats.stable} stable</span>
+              {summaryStats.improving > 0 && <span><span className="inline-block w-2 h-2 rounded-full bg-blue-500 mr-1" />{summaryStats.improving} improving</span>}
             </div>
-            <div className="text-xs text-gray-400">dropped &gt;20% in {selectedTimePeriod}d</div>
-          </CardContent>
-        </Card>
-
-        {/* Warmup Status Card */}
-        <Card className="col-span-1 bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200 hover:shadow-lg transition-shadow">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl">🔥</span>
-              <span className="text-xs text-orange-600 uppercase tracking-wide font-medium">Warmup</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="text-2xl font-bold text-green-600">{summaryStats.warmupOn}</div>
-              <span className="text-gray-400">/</span>
-              <div className="text-lg text-gray-400">{summaryStats.warmupOff}</div>
-            </div>
-            <div className="text-xs text-gray-400">ON / OFF</div>
-          </CardContent>
-        </Card>
-
-        {/* Declining Card */}
-        <Card className={`col-span-1 hover:shadow-lg transition-shadow ${
-          summaryStats.declining === 0 ? "bg-gradient-to-br from-green-50 to-green-100 border-green-200" :
-          "bg-gradient-to-br from-red-50 to-red-100 border-red-200"
-        }`}>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl">{summaryStats.declining === 0 ? "✅" : "🔴"}</span>
-              <span className={`text-xs uppercase tracking-wide font-medium ${
-                summaryStats.declining === 0 ? "text-green-600" : "text-red-600"
-              }`}>Declining</span>
-            </div>
-            <div className={`text-2xl font-bold ${summaryStats.declining === 0 ? "text-green-600" : "text-red-600"}`}>
-              {summaryStats.declining}
-            </div>
-            <div className="text-xs text-gray-400">&gt;50% drop from baseline</div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Warmup Stats Summary Row */}
-      {warmupSummary && (
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-6">
-          <Card className="col-span-2 lg:col-span-1 bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200">
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-2xl">🔥</span>
-                <span className="text-xs text-purple-600 uppercase tracking-wide font-medium">Avg Score</span>
-              </div>
-              <div className="text-2xl font-bold text-purple-600">{warmupSummary.avgScore}</div>
-              <div className={`text-xs ${warmupSummary.avgScoreChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {warmupSummary.avgScoreChange >= 0 ? '↑' : '↓'} {Math.abs(warmupSummary.avgScoreChange)}% from baseline
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className={`col-span-1 ${warmupSummary.declining > 0 ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-200' : 'bg-gradient-to-br from-green-50 to-green-100 border-green-200'}`}>
-            <CardContent className="p-4">
-              <div className="text-xs text-gray-500 mb-1">🔴 Score Declining</div>
-              <div className={`text-xl font-bold ${warmupSummary.declining > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                {warmupSummary.declining}
-              </div>
-              <div className="text-xs text-gray-400">&gt;20% drop</div>
-            </CardContent>
-          </Card>
-
-          <Card className={`col-span-1 ${warmupSummary.warning > 0 ? 'bg-gradient-to-br from-yellow-50 to-yellow-100 border-yellow-200' : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-200'}`}>
-            <CardContent className="p-4">
-              <div className="text-xs text-gray-500 mb-1">🟡 Warning</div>
-              <div className={`text-xl font-bold ${warmupSummary.warning > 0 ? 'text-yellow-600' : 'text-gray-600'}`}>
-                {warmupSummary.warning}
-              </div>
-              <div className="text-xs text-gray-400">10-20% drop</div>
-            </CardContent>
-          </Card>
-
-          <Card className="col-span-1 bg-gradient-to-br from-green-50 to-green-100 border-green-200">
-            <CardContent className="p-4">
-              <div className="text-xs text-gray-500 mb-1">🟢 Stable</div>
-              <div className="text-xl font-bold text-green-600">{warmupSummary.stable}</div>
-              <div className="text-xs text-gray-400">Within ±10%</div>
-            </CardContent>
-          </Card>
-
-          <Card className="col-span-1 bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200">
-            <CardContent className="p-4">
-              <div className="text-xs text-gray-500 mb-1">📈 Improving</div>
-              <div className="text-xl font-bold text-blue-600">{warmupSummary.improving}</div>
-              <div className="text-xs text-gray-400">&gt;20% up</div>
-            </CardContent>
-          </Card>
-
-          <Card className={`col-span-1 ${warmupSummary.bouncesIncreasing > 0 ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-200' : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-200'}`}>
-            <CardContent className="p-4">
-              <div className="text-xs text-gray-500 mb-1">🚫 Bounces ↑</div>
-              <div className={`text-xl font-bold ${warmupSummary.bouncesIncreasing > 0 ? 'text-red-600' : 'text-gray-600'}`}>
-                {warmupSummary.bouncesIncreasing}
-              </div>
-              <div className="text-xs text-gray-400">accounts</div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* At Risk & Warning Accounts - Using Bison warmup API data */}
-      {/* 🔥 LIKELY TO BURN SECTION - Based on Reply Rate Week Over Week */}
+      {/* At-Risk Accounts — collapsible, only shows when there are issues */}
       {(droppedAccountsData.dropped.length > 0 || droppedAccountsData.warning.length > 0) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-          {/* 🔥🔥 Likely to Burn: Reply rate dropped >30% */}
-          {droppedAccountsData.dropped.length > 0 && (
-            <Card className="border-2 border-red-400 bg-gradient-to-br from-red-50 to-red-100">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm lg:text-base flex items-center gap-2">
-                  🔥🔥 Likely to Burn
-                  <Badge variant="destructive" className="ml-auto">
-                    {droppedAccountsData.dropped.length} accounts
-                  </Badge>
-                </CardTitle>
-                <p className="text-xs text-red-600">Reply rate dropped &gt;30% week over week</p>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {droppedAccountsData.dropped.slice(0, 8).map((account) => (
-                    <div
-                      key={account.id}
-                      className="p-3 rounded-lg bg-white border border-red-200 text-sm cursor-pointer hover:bg-red-50 transition-colors"
-                      onClick={() => {
-                        const email = apiEmails?.find(e => e.email.toLowerCase() === account.email.toLowerCase());
-                        if (email) openAccountDetail(email);
-                      }}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-bold text-red-700 truncate flex-1">
-                          {account.percentChange <= -50 ? '🔥🔥🔥' : '🔥🔥'} {account.email}
-                        </span>
-                      </div>
-                      <div className="text-sm font-medium text-red-600">
-                        Reply Rate: Was {typeof account.fromScore === 'number' ? account.fromScore.toFixed(1) : account.fromScore}% → Now {typeof account.toScore === 'number' ? account.toScore.toFixed(1) : account.toScore}% 
-                        <span className="ml-1 font-bold">(↓{Math.abs(Math.round(account.percentChange))}%)</span>
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">This account&apos;s reply rate dropped drastically</div>
-                    </div>
-                  ))}
-                  {droppedAccountsData.dropped.length > 8 && (
-                    <button 
-                      className="w-full text-sm text-red-600 hover:text-red-800 underline py-2"
-                      onClick={() => handleQuickFilter("declining")}
-                    >
-                      View all {droppedAccountsData.dropped.length} at-risk accounts →
-                    </button>
-                  )}
+        <details className="mb-6 group" open={droppedAccountsData.dropped.length > 0}>
+          <summary className="cursor-pointer list-none">
+            <Card className={`${droppedAccountsData.dropped.length > 0 ? 'border-l-4 border-l-red-500' : 'border-l-4 border-l-yellow-400'}`}>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className={`text-sm font-semibold ${droppedAccountsData.dropped.length > 0 ? 'text-red-700' : 'text-yellow-700'}`}>
+                      {droppedAccountsData.dropped.length > 0
+                        ? `${droppedAccountsData.dropped.length} accounts likely to burn`
+                        : `${droppedAccountsData.warning.length} accounts to watch`
+                      }
+                    </span>
+                    {droppedAccountsData.warning.length > 0 && droppedAccountsData.dropped.length > 0 && (
+                      <span className="text-xs text-yellow-600">+ {droppedAccountsData.warning.length} moderate risk</span>
+                    )}
+                    <InfoTooltip text="Likely to burn: warmup reply rate dropped more than 30% vs last period. Moderate risk: dropped 20–30%. A dropping reply rate means email providers are losing trust in this account." />
+                  </div>
+                  <span className="text-gray-400 text-sm group-open:rotate-90 transition-transform">&#9654;</span>
                 </div>
               </CardContent>
             </Card>
-          )}
-
-          {/* 🔥 Warning: Reply rate dropped 20-30% */}
-          {droppedAccountsData.warning.length > 0 && (
-            <Card className="border-2 border-yellow-400 bg-gradient-to-br from-yellow-50 to-yellow-100">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm lg:text-base flex items-center gap-2">
-                  🔥 Moderate Risk
-                  <Badge variant="outline" className="ml-auto border-yellow-400 text-yellow-700">
-                    {droppedAccountsData.warning.length} accounts
-                  </Badge>
-                </CardTitle>
-                <p className="text-xs text-yellow-700">Reply rate dropped 20-30% week over week</p>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {droppedAccountsData.warning.slice(0, 5).map((account) => (
-                    <div
-                      key={account.id}
-                      className="p-3 rounded-lg bg-white border border-yellow-200 text-sm cursor-pointer hover:bg-yellow-50 transition-colors"
-                      onClick={() => {
-                        const email = apiEmails?.find(e => e.email.toLowerCase() === account.email.toLowerCase());
-                        if (email) openAccountDetail(email);
-                      }}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-bold text-yellow-700 truncate flex-1">🔥 {account.email}</span>
-                      </div>
-                      <div className="text-sm font-medium text-yellow-600">
-                        Reply Rate: Was {typeof account.fromScore === 'number' ? account.fromScore.toFixed(1) : account.fromScore}% → Now {typeof account.toScore === 'number' ? account.toScore.toFixed(1) : account.toScore}%
-                        <span className="ml-1 font-bold">(↓{Math.abs(Math.round(account.percentChange))}%)</span>
-                      </div>
-                    </div>
-                  ))}
-                  {droppedAccountsData.warning.length > 5 && (
-                    <button 
-                      className="w-full text-sm text-yellow-600 hover:text-yellow-800 underline py-2"
-                      onClick={() => handleQuickFilter("warning")}
-                    >
-                      View all {droppedAccountsData.warning.length} warning accounts →
-                    </button>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      )}
-
-      {/* Time Period Selector - Prominent placement */}
-      <Card className="mb-6 border-2 border-indigo-200 bg-gradient-to-r from-indigo-50 to-white">
-        <CardContent className="pt-4 px-4 pb-4">
-          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <span className="text-2xl">📅</span>
-              <div>
-                <div className="text-sm font-semibold text-gray-800">Historical Comparison</div>
-                <div className="text-xs text-gray-500">Compare performance to previous period</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <select
-                className="px-4 py-2.5 border-2 border-indigo-300 rounded-lg text-sm bg-white font-medium text-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                value={selectedTimePeriod}
-                onChange={(e) => setSelectedTimePeriod(Number(e.target.value) as 7 | 14 | 30)}
-              >
-                <option value={7}>Last 7 days</option>
-                <option value={14}>Last 14 days</option>
-                <option value={30}>Last 30 days</option>
-              </select>
-              {warmupLoading && (
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Summary Stats for Selected Period - REPLY RATE BASED */}
-      <Card className="mb-6 bg-gray-50">
-        <CardContent className="pt-4 px-4 pb-4">
-          <div className="text-sm font-semibold text-gray-700 mb-3">
-            📊 Reply Rate Changes in the last {selectedTimePeriod} days:
-          </div>
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-            <div className={`p-3 rounded-lg text-center cursor-pointer transition-all hover:scale-105 ${droppedAccountsData.dropped.length > 0 ? 'bg-red-100 border-2 border-red-300' : 'bg-gray-100'}`}
-                 onClick={() => droppedAccountsData.dropped.length > 0 && handleQuickFilter("declining")}>
-              <div className={`text-2xl font-bold ${droppedAccountsData.dropped.length > 0 ? 'text-red-600' : 'text-gray-600'}`}>
-                {droppedAccountsData.dropped.length}
-              </div>
-              <div className="text-xs text-gray-600">🔥🔥 Likely to Burn</div>
-              <div className="text-xs text-red-500 font-medium">(&gt;30% reply rate drop)</div>
-            </div>
-            <div className={`p-3 rounded-lg text-center cursor-pointer transition-all hover:scale-105 ${droppedAccountsData.warning.length > 0 ? 'bg-yellow-100 border-2 border-yellow-300' : 'bg-gray-100'}`}
-                 onClick={() => droppedAccountsData.warning.length > 0 && handleQuickFilter("warning")}>
-              <div className={`text-2xl font-bold ${droppedAccountsData.warning.length > 0 ? 'text-yellow-600' : 'text-gray-600'}`}>
-                {droppedAccountsData.warning.length}
-              </div>
-              <div className="text-xs text-gray-600">🔥 Moderate Risk</div>
-              <div className="text-xs text-yellow-600 font-medium">(20-30% reply rate drop)</div>
-            </div>
-            <div className="p-3 rounded-lg text-center bg-green-100 border border-green-200 cursor-pointer transition-all hover:scale-105"
-                 onClick={() => handleQuickFilter("stable")}>
-              <div className="text-2xl font-bold text-green-600">
-                {droppedAccountsData.stable.length}
-              </div>
-              <div className="text-xs text-gray-600">🟢 Stable</div>
-              <div className="text-xs text-green-600">(within ±20%)</div>
-            </div>
-            <div className="p-3 rounded-lg text-center bg-blue-100 border border-blue-200 cursor-pointer transition-all hover:scale-105"
-                 onClick={() => handleQuickFilter("improving")}>
-              <div className="text-2xl font-bold text-blue-600">
-                {droppedAccountsData.improved.length}
-              </div>
-              <div className="text-xs text-gray-600">📈 Improving</div>
-              <div className="text-xs text-blue-600">(&gt;20% reply rate up)</div>
-            </div>
-            <div className="p-3 rounded-lg text-center bg-purple-100 border border-purple-200">
-              <div className={`text-2xl font-bold ${droppedAccountsData.avgChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {droppedAccountsData.avgChange >= 0 ? '+' : ''}{droppedAccountsData.avgChange}%
-              </div>
-              <div className="text-xs text-gray-600">📉 Avg Reply Rate Change</div>
-              <div className="text-xs text-gray-400">(all accounts)</div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* 🔥🔥🔥 LIKELY TO BURN - Reply Rate Dropped Significantly */}
-      {droppedAccountsData.dropped.length > 0 && (
-        <Card className="mb-6 border-2 border-red-400 bg-gradient-to-r from-red-100 to-red-50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <span className="text-2xl">🔥🔥</span>
-              Likely to Burn - Reply Rate Dropping in Last {selectedTimePeriod} Days
-              <Badge variant="destructive" className="ml-2 text-base px-3 py-1">
-                {droppedAccountsData.dropped.length} accounts at risk
-              </Badge>
-            </CardTitle>
-            <p className="text-sm text-red-600 mt-1">
-              These accounts have reply rates dropping &gt;30% week over week - high burn risk!
-            </p>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <div className="space-y-3">
-              {droppedAccountsData.dropped.slice(0, 10).map((account) => (
+          </summary>
+          <div className="mt-2 space-y-2">
+            {droppedAccountsData.dropped.slice(0, 8).map((account) => {
+              const toRate = typeof account.toScore === 'number' ? account.toScore : 0;
+              const reason = toRate < 10
+                ? 'Reply rate is critically low — consider pausing this account'
+                : toRate < 20
+                ? 'Reply rate dropped below 20% healthy threshold — monitor closely'
+                : 'Reply rate is dropping fast — may burn out if trend continues';
+              return (
                 <div
                   key={account.id}
-                  className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-white border-2 border-red-300 hover:bg-red-50 transition-colors cursor-pointer shadow-sm"
+                  className="flex items-center justify-between p-3 rounded-lg bg-red-50 border border-red-200 text-sm cursor-pointer hover:bg-red-100 transition-colors"
                   onClick={() => {
                     const email = apiEmails?.find(e => e.email.toLowerCase() === account.email.toLowerCase());
                     if (email) openAccountDetail(email);
                   }}
                 >
-                  <div className="flex-1 min-w-0">
-                    <div className="font-bold text-red-700 text-sm truncate flex items-center gap-2">
-                      {account.percentChange <= -50 ? '🔥🔥🔥 CRITICAL:' : '🔥🔥 HIGH RISK:'} {account.email}
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-red-700 truncate">{account.email}</div>
+                    <div className="text-xs text-red-600">
+                      WU Reply Rate: {typeof account.fromScore === 'number' ? account.fromScore.toFixed(1) : account.fromScore}% → {typeof account.toScore === 'number' ? account.toScore.toFixed(1) : account.toScore}%
                     </div>
-                    <div className="text-sm text-red-600 mt-1 font-medium">
-                      Reply Rate: Was {typeof account.fromScore === 'number' ? account.fromScore.toFixed(1) : account.fromScore}% → Now {typeof account.toScore === 'number' ? account.toScore.toFixed(1) : account.toScore}%
-                      <span className="font-bold ml-1">(↓{Math.abs(Math.round(account.percentChange))}%)</span>
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">This account&apos;s reply rate dropped drastically</div>
+                    <div className="text-xs text-red-500 mt-0.5">{reason}</div>
                   </div>
-                  <div className="flex items-center gap-2 mt-2 sm:mt-0">
-                    <Badge variant="destructive" className="whitespace-nowrap text-base px-3 py-1">
-                      {account.percentChange <= -50 ? '🔥🔥🔥' : '🔥🔥'} ↓{Math.abs(Math.round(account.percentChange))}%
-                    </Badge>
-                  </div>
+                  <span className="text-red-600 font-bold text-sm ml-3 whitespace-nowrap">
+                    ↓{Math.abs(Math.round(account.percentChange))}%
+                  </span>
                 </div>
-              ))}
-              {droppedAccountsData.dropped.length > 10 && (
-                <div className="text-center py-2">
-                  <button
-                    onClick={() => handleQuickFilter("declining")}
-                    className="text-sm text-red-600 hover:text-red-800 underline font-medium"
-                  >
-                    View all {droppedAccountsData.dropped.length} at-risk accounts →
-                  </button>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Improved Accounts Section - Show if there are improved accounts */}
-      {droppedAccountsData.improved.length > 0 && droppedAccountsData.dropped.length === 0 && (
-        <Card className="mb-6 border-2 border-green-300 bg-gradient-to-r from-green-50 to-white">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <span className="text-2xl">🎉</span>
-              Accounts Improving in Last {selectedTimePeriod} Days
-              <Badge className="ml-2 text-base px-3 py-1 bg-green-600">
-                {droppedAccountsData.improved.length} accounts
-              </Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <div className="space-y-2">
-              {droppedAccountsData.improved.slice(0, 5).map((account) => (
-                <div
-                  key={account.id}
-                  className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-green-50 border border-green-200"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-sm truncate">{account.email}</div>
-                  </div>
-                  <div className="flex items-center gap-3 mt-2 sm:mt-0">
-                    <div className="text-sm text-gray-600">
-                      <span className="font-medium">{account.fromScore}</span>
-                      <span className="mx-1">→</span>
-                      <span className="font-medium">{account.toScore}</span>
-                    </div>
-                    <Badge className="whitespace-nowrap text-sm px-2 py-0.5 bg-green-600">
-                      ↑ {Math.round(account.percentChange)}%
-                    </Badge>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Quick Filter Buttons - Based on Reply Rate Changes */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        <button
-          onClick={() => handleQuickFilter("all")}
-          className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-            healthFilter === "all"
-              ? "bg-gray-900 text-white shadow-lg"
-              : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-          }`}
-        >
-          📋 All ({filterCounts.all})
-        </button>
-        <button
-          onClick={() => handleQuickFilter("declining")}
-          className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-            healthFilter === "declining"
-              ? "bg-red-600 text-white shadow-lg"
-              : "bg-red-100 text-red-700 hover:bg-red-200"
-          }`}
-        >
-          🔥🔥 Show Declining ({filterCounts.declining})
-        </button>
-        <button
-          onClick={() => handleQuickFilter("warning")}
-          className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-            healthFilter === "warning"
-              ? "bg-yellow-500 text-white shadow-lg"
-              : "bg-yellow-100 text-yellow-700 hover:bg-yellow-200"
-          }`}
-        >
-          🔥 Moderate Risk ({filterCounts.warning})
-        </button>
-        <button
-          onClick={() => handleQuickFilter("stable")}
-          className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-            healthFilter === "stable"
-              ? "bg-green-600 text-white shadow-lg"
-              : "bg-green-100 text-green-700 hover:bg-green-200"
-          }`}
-        >
-          🟢 Stable ({filterCounts.stable})
-        </button>
-        <button
-          onClick={() => handleQuickFilter("improving")}
-          className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-            healthFilter === "improving"
-              ? "bg-blue-600 text-white shadow-lg"
-              : "bg-blue-100 text-blue-700 hover:bg-blue-200"
-          }`}
-        >
-          📈 Improving ({filterCounts.improving})
-        </button>
-      </div>
-
-      {/* Filters */}
-      <Card className="mb-4 lg:mb-6">
-        <CardContent className="pt-4 lg:pt-6 px-4 lg:px-6">
-          <div className="flex flex-col lg:flex-row gap-3 lg:gap-4">
-            <div className="flex-1">
-              <Input
-                placeholder="🔍 Search by email or name..."
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                  updateURL(healthFilter, warmupFilter, e.target.value, sortBy, sortOrder);
-                }}
-                className="text-sm"
-              />
-            </div>
-            <div className="flex gap-2 flex-wrap">
-              <select
-                className="flex-1 lg:flex-none px-3 py-2 border rounded-md text-sm"
-                value={warmupFilter}
-                onChange={(e) => {
-                  const newWarmup = e.target.value as "on" | "off" | "all";
-                  setWarmupFilter(newWarmup);
-                  setPage(1);
-                  updateURL(healthFilter, newWarmup, search, sortBy, sortOrder);
-                }}
-              >
-                <option value="all">🔥 All Warmup</option>
-                <option value="on">✅ Warmup ON</option>
-                <option value="off">⏸️ Warmup OFF</option>
-              </select>
-              <select
-                className="flex-1 lg:flex-none px-3 py-2 border rounded-md text-sm"
-                value={sortBy}
-                onChange={(e) => {
-                  const newSort = e.target.value as "replyRate" | "dailyLimit" | "totalSent";
-                  setSortBy(newSort);
-                  setPage(1);
-                  updateURL(healthFilter, warmupFilter, search, newSort, sortOrder);
-                }}
-              >
-                <option value="replyRate">📊 Sort: Reply Rate</option>
-                <option value="dailyLimit">📈 Sort: Daily Limit</option>
-                <option value="totalSent">📤 Sort: Total Sent</option>
-              </select>
-              <button
+              );
+            })}
+            {droppedAccountsData.warning.slice(0, 5).map((account) => (
+              <div
+                key={account.id}
+                className="flex items-center justify-between p-3 rounded-lg bg-yellow-50 border border-yellow-200 text-sm cursor-pointer hover:bg-yellow-100 transition-colors"
                 onClick={() => {
-                  const newOrder = sortOrder === "asc" ? "desc" : "asc";
-                  setSortOrder(newOrder);
-                  updateURL(healthFilter, warmupFilter, search, sortBy, newOrder);
+                  const email = apiEmails?.find(e => e.email.toLowerCase() === account.email.toLowerCase());
+                  if (email) openAccountDetail(email);
                 }}
-                className="px-3 py-2 border rounded-md text-sm hover:bg-gray-50"
-                title={sortOrder === "asc" ? "Lowest first" : "Highest first"}
               >
-                {sortOrder === "asc" ? "↑ Low→High" : "↓ High→Low"}
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-yellow-700 truncate">{account.email}</div>
+                  <div className="text-xs text-yellow-600">
+                    WU Reply Rate: {typeof account.fromScore === 'number' ? account.fromScore.toFixed(1) : account.fromScore}% → {typeof account.toScore === 'number' ? account.toScore.toFixed(1) : account.toScore}%
+                  </div>
+                  <div className="text-xs text-yellow-500 mt-0.5">Reply rate dipping — if it keeps dropping, may need to pause</div>
+                </div>
+                <span className="text-yellow-600 font-bold text-sm ml-3 whitespace-nowrap">
+                  ↓{Math.abs(Math.round(account.percentChange))}%
+                </span>
+              </div>
+            ))}
+            {(droppedAccountsData.dropped.length > 8 || droppedAccountsData.warning.length > 5) && (
+              <button
+                onClick={() => handleQuickFilter("declining")}
+                className="w-full text-sm text-gray-500 hover:text-gray-700 py-2"
+              >
+                View all in table →
               </button>
-            </div>
+            )}
           </div>
-        </CardContent>
-      </Card>
+        </details>
+      )}
+
+      {/* Filters — single consolidated bar */}
+      <div className="flex flex-col gap-3 mb-4">
+        {/* Row 1: Search + time period + warmup filter */}
+        <div className="flex flex-col lg:flex-row gap-2">
+          <div className="flex-1">
+            <Input
+              placeholder="Search by email or name..."
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+                updateURL(healthFilter, warmupFilter, e.target.value, sortBy, sortOrder);
+              }}
+              className="text-sm"
+            />
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <select
+              className="px-3 py-2 border rounded-md text-sm bg-white"
+              value={selectedTimePeriod}
+              onChange={(e) => setSelectedTimePeriod(Number(e.target.value) as 7 | 14 | 30)}
+            >
+              <option value={7}>Last 7 days</option>
+              <option value={14}>Last 14 days</option>
+              <option value={30}>Last 30 days</option>
+            </select>
+            {warmupLoading && (
+              <div className="flex items-center px-2">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
+              </div>
+            )}
+            <select
+              className="px-3 py-2 border rounded-md text-sm bg-white"
+              value={warmupFilter}
+              onChange={(e) => {
+                const newWarmup = e.target.value as "on" | "off" | "all";
+                setWarmupFilter(newWarmup);
+                setPage(1);
+                updateURL(healthFilter, newWarmup, search, sortBy, sortOrder);
+              }}
+            >
+              <option value="all">All Warmup</option>
+              <option value="on">Warmup ON</option>
+              <option value="off">Warmup OFF</option>
+            </select>
+            <select
+              className="px-3 py-2 border rounded-md text-sm bg-white"
+              value={sortBy}
+              onChange={(e) => {
+                const newSort = e.target.value as "replyRate" | "dailyLimit" | "totalSent";
+                setSortBy(newSort);
+                setPage(1);
+                updateURL(healthFilter, warmupFilter, search, newSort, sortOrder);
+              }}
+            >
+              <option value="replyRate">Sort: WU Reply Rate</option>
+              <option value="dailyLimit">Sort: Daily Limit</option>
+              <option value="totalSent">Sort: Total Sent</option>
+            </select>
+            <button
+              onClick={() => {
+                const newOrder = sortOrder === "asc" ? "desc" : "asc";
+                setSortOrder(newOrder);
+                updateURL(healthFilter, warmupFilter, search, sortBy, newOrder);
+              }}
+              className="px-3 py-2 border rounded-md text-sm hover:bg-gray-50 bg-white"
+              title={sortOrder === "asc" ? "Lowest first" : "Highest first"}
+            >
+              {sortOrder === "asc" ? "↑ Low first" : "↓ High first"}
+            </button>
+          </div>
+        </div>
+
+        {/* Row 2: Quick filters */}
+        <div className="flex flex-wrap gap-1.5">
+          {([
+            { key: "all" as const, label: "All", desc: "", count: filterCounts.all, activeClass: "bg-gray-900 text-white", inactiveClass: "bg-gray-100 text-gray-700 hover:bg-gray-200" },
+            { key: "declining" as const, label: "Declining", desc: "Reply rate dropped >50%", count: filterCounts.declining, activeClass: "bg-red-600 text-white", inactiveClass: "bg-red-50 text-red-700 hover:bg-red-100" },
+            { key: "warning" as const, label: "Warning", desc: "Reply rate dropped 30-50%", count: filterCounts.warning, activeClass: "bg-yellow-500 text-white", inactiveClass: "bg-yellow-50 text-yellow-700 hover:bg-yellow-100" },
+            { key: "stable" as const, label: "Stable", desc: "Reply rate within ±30%", count: filterCounts.stable, activeClass: "bg-green-600 text-white", inactiveClass: "bg-green-50 text-green-700 hover:bg-green-100" },
+            { key: "improving" as const, label: "Improving", desc: "Reply rate up >30%", count: filterCounts.improving, activeClass: "bg-blue-600 text-white", inactiveClass: "bg-blue-50 text-blue-700 hover:bg-blue-100" },
+          ]).map(({ key, label, desc, count, activeClass, inactiveClass }) => (
+            <button
+              key={key}
+              onClick={() => handleQuickFilter(key)}
+              title={desc}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                healthFilter === key ? activeClass : inactiveClass
+              }`}
+            >
+              {label} ({count})
+            </button>
+          ))}
+        </div>
+        {/* Explanation of selected filter */}
+        {healthFilter !== "all" && (
+          <div className="text-xs text-gray-500 mt-1.5 ml-1">
+            {healthFilter === "declining" && "Accounts where warmup reply rate dropped more than 50% vs the prior period — these may be burning out."}
+            {healthFilter === "warning" && "Accounts where warmup reply rate dropped 30–50% vs the prior period — keep an eye on these."}
+            {healthFilter === "stable" && "Accounts where warmup reply rate is within ±30% of the prior period — no action needed."}
+            {healthFilter === "improving" && "Accounts where warmup reply rate increased more than 30% vs the prior period — getting healthier."}
+          </div>
+        )}
+      </div>
 
       {/* Selection Info Bar */}
       {selectedIds.size > 0 && (
@@ -1792,138 +1460,90 @@ function EmailsPageContent() {
       )}
 
       {/* Mobile Card View */}
-      <div className="lg:hidden space-y-3">
-        {/* Select All for Mobile */}
-        <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-          <Checkbox
-            checked={allOnPageSelected}
-            indeterminate={someOnPageSelected && !allOnPageSelected}
-            onChange={selectAllOnPage}
-          />
-          <span className="text-sm text-gray-600">
-            {allOnPageSelected ? "Deselect all on page" : "Select all on page"}
-          </span>
-        </div>
-
+      <div className="lg:hidden space-y-2">
         {(emails as DisplayEmail[]).map((email) => {
-          const hasSends = (email.totalSent || email.sentLast7Days) > 0;
           const isSelected = selectedIds.has(email.id);
-          const warmupEnabled = email.warmupEnabled !== false && email.warmupStatus !== "paused";
-          const trend = calculateAccountTrend(email.id);
-          
-          // Get warmup stats for this account from Bison API
           const warmupStats = warmupStatsMap.get(email.email.toLowerCase());
           const health = getHealthFromWarmup(warmupStats);
           const healthInfo = getHealthLabel(health);
-          const periodChange = warmupStats?.changes?.warmup_score;
-          const hasSignificantDrop = periodChange !== undefined && periodChange < -20;
-          const hasWarningDrop = periodChange !== undefined && periodChange >= -20 && periodChange < -10;
-          const hasImproved = periodChange !== undefined && periodChange > 10;
+          const burnRisk = calculateBurnRisk(warmupStats);
+          const wuRate = warmupStats?.current?.warmup_reply_rate ?? 0;
+          const wuHasSends = (warmupStats?.current?.warmup_emails_sent ?? 0) > 0;
 
           return (
-            <Card
+            <div
               key={email.id}
-              className={`cursor-pointer transition-all hover:shadow-md ${
+              className={`p-3 rounded-lg border cursor-pointer transition-colors ${
                 isSelected ? "ring-2 ring-blue-500 bg-blue-50" :
-                hasSignificantDrop ? "border-red-300 bg-red-50 ring-1 ring-red-200" :
-                hasWarningDrop ? "border-yellow-300 bg-yellow-50" :
-                health === "declining" ? "border-red-200 bg-red-50" :
-                health === "warning" ? "border-yellow-200 bg-yellow-50" :
-                "hover:bg-gray-50"
+                burnRisk.level === 'critical' ? "bg-red-50 border-red-200" :
+                burnRisk.level === 'high' ? "bg-orange-50 border-orange-200" :
+                "bg-white hover:bg-gray-50"
               }`}
               onClick={() => openAccountDetail(email)}
             >
-              <CardContent className="p-4">
-                <div className="flex items-start gap-3">
-                  <Checkbox
-                    checked={isSelected}
-                    onChange={() => toggleSelectEmail(email.id)}
-                    onClick={(e) => e.stopPropagation()}
-                    className="mt-1"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex justify-between items-start mb-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium text-sm truncate flex items-center gap-2">
-                          <span className="text-lg">{healthInfo.emoji}</span>
-                          {email.email}
-                        </div>
-                        <div className="text-xs text-gray-500">{email.name}</div>
-                      </div>
-                      {/* Period change badge */}
-                      {periodChange !== undefined && Math.abs(periodChange) > 10 && (
-                        <Badge 
-                          variant={hasSignificantDrop || hasWarningDrop ? "destructive" : "default"}
-                          className={`ml-2 text-xs ${hasImproved ? 'bg-green-600' : ''}`}
-                        >
-                          {periodChange > 0 ? '↑' : '↓'} {Math.abs(Math.round(periodChange))}% in {selectedTimePeriod}d
-                        </Badge>
-                      )}
-                      {/* View detail indicator */}
-                      <span className="text-gray-400 text-lg ml-2">›</span>
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  checked={isSelected}
+                  onChange={() => toggleSelectEmail(email.id)}
+                  onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                  className="mt-1"
+                />
+                <div className="flex-1 min-w-0">
+                  {/* Row 1: Email + status */}
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-sm truncate">{email.email}</div>
+                      <div className="text-xs text-gray-400">{email.name}</div>
                     </div>
-
-                    {/* Health Status - Using Bison warmup API data */}
-                    <div className="bg-white rounded-lg p-3 mb-3 border">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs text-gray-500">📊 Health Trend</span>
-                        <span className={`text-xs font-medium ${healthInfo.color}`}>
-                          {healthInfo.label}
+                    {email.connectionStatus === 'disconnected' ? (
+                      <span className="text-xs text-gray-400">Disconnected</span>
+                    ) : burnRisk.level !== 'low' ? (
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold text-white ${getBurnRiskClasses(burnRisk.level).badge}`}>
+                        {burnRisk.level === 'critical' ? 'CRITICAL' : burnRisk.level === 'high' ? 'HIGH' : 'WATCH'}
+                      </span>
+                    ) : (
+                      <span className={`text-xs ${healthInfo.color}`}>{healthInfo.label}</span>
+                    )}
+                  </div>
+                  {/* Row 2: Key metrics */}
+                  <div className="flex items-center gap-4 text-xs">
+                    <div>
+                      <span className="text-gray-500">Reply: </span>
+                      <span className={`font-medium ${wuRate < 10 ? 'text-red-600' : wuRate >= 20 ? 'text-green-600' : 'text-gray-700'}`}>
+                        {wuHasSends ? `${Math.round(wuRate * 10) / 10}%` : '-'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Score: </span>
+                      <span className="font-medium">{wuHasSends ? warmupStats?.current?.warmup_score : '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Sent: </span>
+                      <span className="font-medium">{(email.totalSent || email.sentLast7Days).toLocaleString()}</span>
+                    </div>
+                    {(warmupStats?.current?.warmup_bounces_received_count ?? 0) > 0 && (
+                      <div>
+                        <span className="text-red-600 font-medium">
+                          {warmupStats!.current.warmup_bounces_received_count} bounces
                         </span>
                       </div>
-                      <TrendChangeDisplay warmup={warmupStats} compact />
-                    </div>
-
-                    {/* Reply Rate Visual */}
-                    <div className="bg-white rounded-lg p-3 mb-3 border">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs text-gray-500">💬 Current Reply Rate</span>
-                        {trend && trend.replyRates.length > 1 && (
-                          <EnhancedSparkline data={trend.replyRates} width={70} height={24} />
-                        )}
-                      </div>
-                      <ReplyRateBar rate={email.replyRate} hasSends={hasSends} />
-                    </div>
-
-                    {/* Warmup Stats (from API) */}
-                    <WarmupStatsCard warmup={warmupStatsMap.get(email.email.toLowerCase())} />
-
-                    {/* Warmup Stage */}
-                    <div className="bg-white rounded-lg p-3 border mb-3 mt-3">
-                      <div className="text-xs text-gray-500 mb-2">🔥 Warmup Stage</div>
-                      <WarmupStageIndicator dailyLimit={email.dailyLimit} warmupEnabled={warmupEnabled} />
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2 text-xs">
-                      <div className="bg-gray-50 p-2 rounded">
-                        <div className="text-gray-500">📅 Active</div>
-                        <div className="font-medium">{email.daysActive ?? getDaysActive(email.createdAt)}d</div>
-                      </div>
-                      <div className="bg-gray-50 p-2 rounded">
-                        <div className="text-gray-500">📤 Sent</div>
-                        <div className="font-medium">{(email.totalSent || email.sentLast7Days).toLocaleString()}</div>
-                      </div>
-                      <div className="bg-gray-50 p-2 rounded">
-                        <div className="text-gray-500">💬 Replies</div>
-                        <div className="font-medium">{(email.totalReplies || email.repliesLast7Days).toLocaleString()}</div>
-                      </div>
-                    </div>
+                    )}
                   </div>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           );
         })}
       </div>
 
-      {/* Desktop Table View */}
+      {/* Desktop Table View — 7 columns: checkbox, email, status, reply rate, score, bounces, activity */}
       <Card className="hidden lg:block">
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b bg-gray-50">
-                  <th className="text-left p-4 w-12">
+                <tr className="border-b bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                  <th className="text-left p-3 w-10">
                     <Checkbox
                       checked={allOnPageSelected}
                       indeterminate={someOnPageSelected && !allOnPageSelected}
@@ -1931,237 +1551,191 @@ function EmailsPageContent() {
                       title={allOnPageSelected ? "Deselect all" : "Select all"}
                     />
                   </th>
-                  <th className="text-left p-4 font-medium text-sm text-gray-600">📧 Email</th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">🔥 Burn Risk</th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">Health</th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">Trend</th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">
-                    <button
+                  <th className="text-left p-3">Account</th>
+                  <th className="text-center p-3">
+                    <span className="inline-flex items-center gap-1">
+                      Status
+                      <InfoTooltip text="Based on warmup reply rate change vs the prior period. Declining: dropped >50%. Warning: dropped 30-50%. Stable: within ±30%. Improving: up >30%. Disconnected: account not connected to Bison." />
+                    </span>
+                  </th>
+                  <th className="text-center p-3">
+                    <span
+                      className="inline-flex items-center gap-1 cursor-pointer hover:text-gray-900"
                       onClick={() => {
                         setSortBy("replyRate");
                         const newOrder = sortBy === "replyRate" ? (sortOrder === "asc" ? "desc" : "asc") : "asc";
                         setSortOrder(newOrder);
                         updateURL(healthFilter, warmupFilter, search, "replyRate", newOrder);
                       }}
-                      className="hover:text-gray-900 flex items-center gap-1 mx-auto"
                     >
-                      💬 Reply Rate
+                      WU Reply Rate
+                      <InfoTooltip text="% of warmup emails that got replies. Healthy: 20-40%. Below 10%: concern. Measures how email providers treat this account." />
                       {sortBy === "replyRate" && (sortOrder === "asc" ? " ↑" : " ↓")}
-                    </button>
+                    </span>
                   </th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">
-                    <button
-                      onClick={() => {
-                        setSortBy("dailyLimit");
-                        const newOrder = sortBy === "dailyLimit" ? (sortOrder === "asc" ? "desc" : "asc") : "desc";
-                        setSortOrder(newOrder);
-                        updateURL(healthFilter, warmupFilter, search, "dailyLimit", newOrder);
-                      }}
-                      className="hover:text-gray-900 flex items-center gap-1 mx-auto"
-                    >
-                      🔥 Warmup Stage
-                      {sortBy === "dailyLimit" && (sortOrder === "asc" ? " ↑" : " ↓")}
-                    </button>
+                  <th className="text-center p-3">
+                    <span className="inline-flex items-center gap-1">
+                      Score
+                      <InfoTooltip text="Warmup health score from Bison. Higher = better deliverability. Drops mean email providers are losing trust." />
+                    </span>
                   </th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">🔥 WU Score</th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">
-                    📅 {selectedTimePeriod}d Change
+                  <th className="text-center p-3">
+                    <span className="inline-flex items-center gap-1">
+                      Bounces
+                      <InfoTooltip text="Warmup emails that bounced. Rising bounces = email providers rejecting this account." />
+                    </span>
                   </th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">🚫 Bounces</th>
-                  <th className="text-center p-4 font-medium text-sm text-gray-600">📈 Sparkline</th>
-                  <th className="text-right p-4 font-medium text-sm text-gray-600">
-                    <button
+                  <th className="text-right p-3">
+                    <span
+                      className="inline-flex items-center gap-1 cursor-pointer hover:text-gray-900 ml-auto"
                       onClick={() => {
                         setSortBy("totalSent");
                         const newOrder = sortBy === "totalSent" ? (sortOrder === "asc" ? "desc" : "asc") : "desc";
                         setSortOrder(newOrder);
                         updateURL(healthFilter, warmupFilter, search, "totalSent", newOrder);
                       }}
-                      className="hover:text-gray-900 flex items-center gap-1 ml-auto"
                     >
-                      📤 Sent
+                      Activity
                       {sortBy === "totalSent" && (sortOrder === "asc" ? " ↑" : " ↓")}
-                    </button>
+                    </span>
                   </th>
-                  <th className="text-right p-4 font-medium text-sm text-gray-600">💬 Replies</th>
                 </tr>
               </thead>
               <tbody>
                 {(emails as DisplayEmail[]).map((email) => {
-                  const hasSends = (email.totalSent || email.sentLast7Days) > 0;
                   const isSelected = selectedIds.has(email.id);
-                  const warmupEnabled = email.warmupEnabled !== false && email.warmupStatus !== "paused";
-                  const trend = calculateAccountTrend(email.id);
-                  
-                  // Get warmup stats for this account from Bison API
                   const warmupStats = warmupStatsMap.get(email.email.toLowerCase());
                   const health = getHealthFromWarmup(warmupStats);
-                  const periodChange = warmupStats?.changes?.warmup_score;
-                  const hasSignificantDrop = periodChange !== undefined && periodChange < -20;
-                  const hasWarningDrop = periodChange !== undefined && periodChange >= -20 && periodChange < -10;
-                  const hasImproved = periodChange !== undefined && periodChange > 10;
-                  
-                  // 🔥 Calculate burn risk for this account
+                  const healthInfo = getHealthLabel(health);
                   const burnRisk = calculateBurnRisk(warmupStats);
-                  const burnRiskClasses = getBurnRiskClasses(burnRisk.level);
+                  const wuRate = warmupStats?.current?.warmup_reply_rate ?? 0;
+                  const wuHasSends = (warmupStats?.current?.warmup_emails_sent ?? 0) > 0;
+
+                  // Row color: only tint for burn risk or selected
+                  const rowClass = isSelected ? "bg-blue-50" :
+                    burnRisk.level === 'critical' ? "bg-red-50" :
+                    burnRisk.level === 'high' ? "bg-orange-50" :
+                    "hover:bg-gray-50";
 
                   return (
                     <tr
                       key={email.id}
-                      className={`border-b cursor-pointer transition-all ${
-                        isSelected ? "bg-blue-50" :
-                        burnRisk.level === 'critical' ? "bg-red-200 hover:bg-red-300" :
-                        burnRisk.level === 'high' ? "bg-orange-100 hover:bg-orange-200" :
-                        burnRisk.level === 'moderate' ? "bg-yellow-100 hover:bg-yellow-200" :
-                        hasSignificantDrop ? "bg-red-100 hover:bg-red-200" :
-                        hasWarningDrop ? "bg-yellow-50 hover:bg-yellow-100" :
-                        health === "declining" ? "bg-red-50 hover:bg-red-100" :
-                        health === "warning" ? "bg-yellow-50 hover:bg-yellow-100" :
-                        "hover:bg-gray-50"
-                      }`}
+                      className={`border-b cursor-pointer transition-colors ${rowClass}`}
                       onClick={() => openAccountDetail(email)}
                     >
-                      <td className="p-4" onClick={(e) => e.stopPropagation()}>
+                      <td className="p-3" onClick={(e) => e.stopPropagation()}>
                         <Checkbox
                           checked={isSelected}
                           onChange={() => toggleSelectEmail(email.id)}
                         />
                       </td>
-                      <td className="p-4">
-                        <div className="flex items-center gap-2">
-                          {/* 🔥 Burn Risk Indicator */}
-                          {burnRisk.level !== 'low' && (
-                            <span className="text-xl" title={`${burnRisk.level.toUpperCase()} RISK: ${burnRisk.score}/100`}>
-                              {burnRisk.emoji}
-                            </span>
-                          )}
-                          <div>
-                            <div className="font-medium flex items-center gap-2">
-                              {email.email}
-                              {/* 🔥 Burn Risk Badge */}
-                              {burnRisk.level !== 'low' && (
-                                <span className={`px-2 py-0.5 rounded text-xs font-bold text-white ${burnRiskClasses.badge}`}>
-                                  {burnRisk.score}
+                      {/* Account */}
+                      <td className="p-3">
+                        <div className="font-medium text-sm">{email.email}</div>
+                        <div className="text-xs text-gray-400">{email.name}</div>
+                      </td>
+                      {/* Status — merged burn risk + health + trend */}
+                      <td className="p-3 text-center">
+                        {(() => {
+                          const replyRateChange = warmupStats?.changes?.warmup_reply_rate ?? 0;
+                          const currentRate = warmupStats?.current?.warmup_reply_rate ?? 0;
+
+                          if (email.connectionStatus === 'disconnected') {
+                            return (
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span className="inline-block w-2 h-2 rounded-full bg-gray-400" />
+                                <span className="text-xs text-gray-400">Disconnected</span>
+                                <InfoTooltip text="This account is not connected to Bison. Reconnect it to resume warmup and tracking." />
+                              </div>
+                            );
+                          }
+                          if (burnRisk.level !== 'low') {
+                            const tipText = burnRisk.level === 'critical'
+                              ? `Reply rate dropped ${Math.abs(Math.round(replyRateChange))}% vs last period. Currently at ${currentRate.toFixed(1)}%. Consider pausing campaigns from this account.`
+                              : burnRisk.level === 'high'
+                              ? `Reply rate dropped ${Math.abs(Math.round(replyRateChange))}% vs last period. Currently at ${currentRate.toFixed(1)}%. Monitor closely — may need to pause soon.`
+                              : `Reply rate dropped ${Math.abs(Math.round(replyRateChange))}% vs last period. Currently at ${currentRate.toFixed(1)}%. Keep an eye on it.`;
+                            return (
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold text-white ${getBurnRiskClasses(burnRisk.level).badge}`}>
+                                  {burnRisk.level === 'critical' ? 'CRITICAL' : burnRisk.level === 'high' ? 'HIGH RISK' : 'MODERATE'}
+                                </span>
+                                <span className="text-xs text-gray-500">
+                                  ↓{Math.abs(Math.round(burnRisk.replyRateChange ?? 0))}% reply rate
+                                </span>
+                                <InfoTooltip text={tipText} />
+                              </div>
+                            );
+                          }
+                          const tipText = health === 'improving'
+                            ? `Reply rate increased ${Math.round(replyRateChange)}% vs last period. Currently at ${currentRate.toFixed(1)}%. Account is getting healthier.`
+                            : health === 'declining'
+                            ? `Reply rate dropped ${Math.abs(Math.round(replyRateChange))}% vs last period. Currently at ${currentRate.toFixed(1)}%. Watch for further drops.`
+                            : health === 'warning'
+                            ? `Reply rate dropped ${Math.abs(Math.round(replyRateChange))}% vs last period. Currently at ${currentRate.toFixed(1)}%. Trending down.`
+                            : !warmupStats
+                            ? 'No warmup data available for this account yet.'
+                            : `Reply rate is steady (${replyRateChange >= 0 ? '+' : ''}${Math.round(replyRateChange)}% change). Currently at ${currentRate.toFixed(1)}%. No action needed.`;
+                          return (
+                            <div className="flex flex-col items-center gap-0.5">
+                              <span className={`inline-block w-2 h-2 rounded-full ${
+                                health === 'declining' ? 'bg-red-500' :
+                                health === 'warning' ? 'bg-yellow-400' :
+                                health === 'improving' ? 'bg-blue-500' :
+                                'bg-green-500'
+                              }`} />
+                              <span className={`text-xs ${healthInfo.color}`}>{healthInfo.label}</span>
+                              <InfoTooltip text={tipText} />
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      {/* WU Reply Rate */}
+                      <td className="p-3">
+                        <div className="flex justify-center">
+                          <ReplyRateBar rate={Math.round(wuRate * 100) / 100} hasSends={wuHasSends} />
+                        </div>
+                      </td>
+                      {/* Score */}
+                      <td className="p-3 text-center">
+                        {(() => {
+                          if (!warmupStats || !wuHasSends) return <span className="text-xs text-gray-400">-</span>;
+                          const score = warmupStats.current.warmup_score;
+                          const change = warmupStats.changes.warmup_score;
+                          const changeColor = change > 5 ? 'text-green-600' : change < -5 ? 'text-red-600' : 'text-gray-400';
+                          return (
+                            <div>
+                              <span className="font-medium text-sm">{score}</span>
+                              {Math.abs(change) >= 5 && (
+                                <span className={`text-xs ml-1 ${changeColor}`}>
+                                  {change > 0 ? '+' : ''}{Math.round(change)}%
                                 </span>
                               )}
                             </div>
-                            <div className="text-xs text-gray-500">{email.name}</div>
-                          </div>
-                          {/* Period change badge (only show if not at burn risk) */}
-                          {burnRisk.level === 'low' && periodChange !== undefined && Math.abs(periodChange) > 10 && (
-                            <Badge 
-                              variant={hasSignificantDrop || hasWarningDrop ? "destructive" : "default"}
-                              className={`text-xs whitespace-nowrap ${hasImproved ? 'bg-green-600' : ''}`}
-                            >
-                              {periodChange > 0 ? '↑' : '↓'} {Math.abs(Math.round(periodChange))}% in {selectedTimePeriod}d
-                            </Badge>
-                          )}
-                        </div>
+                          );
+                        })()}
                       </td>
-                      <td className="p-4 text-center">
-                        {/* 🔥 Burn Risk Column */}
-                        {burnRisk.level !== 'low' ? (
-                          <div className="flex flex-col items-center gap-1">
-                            <span className="text-xl">{burnRisk.emoji}</span>
-                            <span className={`text-xs font-bold px-2 py-0.5 rounded text-white ${burnRiskClasses.badge}`}>
-                              {burnRisk.score}/100
+                      {/* Bounces */}
+                      <td className="p-3 text-center">
+                        {(() => {
+                          if (!warmupStats || !wuHasSends) return <span className="text-xs text-gray-400">-</span>;
+                          const bounces = warmupStats.current.warmup_bounces_received_count;
+                          const change = warmupStats.changes.warmup_bounces_received_count;
+                          return (
+                            <span className={`text-sm ${bounces > 0 ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
+                              {bounces}{change > 0 ? ` (+${change})` : ''}
                             </span>
-                            <span className={`text-xs ${burnRiskClasses.text}`}>{burnRisk.level}</span>
-                          </div>
-                        ) : (
-                          <span className="text-gray-400 text-lg">✅</span>
-                        )}
-                      </td>
-                      <td className="p-4 text-center">
-                        <TrendHealthIndicator warmup={warmupStats} />
-                      </td>
-                      <td className="p-4">
-                        <TrendChangeDisplay warmup={warmupStats} compact />
-                      </td>
-                      <td className="p-4">
-                        <div className="flex justify-center">
-                          <ReplyRateBar rate={email.replyRate} hasSends={hasSends} />
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <div className="flex justify-center">
-                          <WarmupStageIndicator dailyLimit={email.dailyLimit} warmupEnabled={warmupEnabled} />
-                        </div>
-                      </td>
-                      <td className="p-4 text-center">
-                        {(() => {
-                          const warmup = warmupStatsMap.get(email.email.toLowerCase());
-                          if (!warmup) return <span className="text-xs text-gray-400">-</span>;
-                          const changeIcon = warmup.changes.warmup_score > 5 ? '↑' : warmup.changes.warmup_score < -5 ? '↓' : '';
-                          const changeColor = warmup.changes.warmup_score > 5 ? 'text-green-600' : warmup.changes.warmup_score < -5 ? 'text-red-600' : '';
-                          return (
-                            <div className="flex flex-col items-center">
-                              <span className="font-medium">{warmup.current.warmup_score}</span>
-                              {changeIcon && (
-                                <span className={`text-xs ${changeColor}`}>
-                                  {changeIcon}{Math.abs(Math.round(warmup.changes.warmup_score))}%
-                                </span>
-                              )}
-                            </div>
                           );
                         })()}
                       </td>
-                      <td className="p-4 text-center">
-                        {(() => {
-                          if (periodChange === undefined) return <span className="text-xs text-gray-400">-</span>;
-                          const absChange = Math.abs(Math.round(periodChange));
-                          if (absChange < 5) return <span className="text-xs text-gray-500">—</span>;
-                          
-                          const isDropped = periodChange < -20;
-                          const isWarning = periodChange >= -20 && periodChange < -10;
-                          const isImproved = periodChange > 10;
-                          
-                          return (
-                            <div className={`flex flex-col items-center font-semibold ${
-                              isDropped ? 'text-red-600' :
-                              isWarning ? 'text-yellow-600' :
-                              isImproved ? 'text-green-600' :
-                              'text-gray-600'
-                            }`}>
-                              <span className="text-lg">
-                                {periodChange > 0 ? '↑' : '↓'} {absChange}%
-                              </span>
-                              {isDropped && <span className="text-xs">🔴 Big drop</span>}
-                              {isImproved && <span className="text-xs">📈 Improving</span>}
-                            </div>
-                          );
-                        })()}
-                      </td>
-                      <td className="p-4 text-center">
-                        {(() => {
-                          const warmup = warmupStatsMap.get(email.email.toLowerCase());
-                          if (!warmup) return <span className="text-xs text-gray-400">-</span>;
-                          const bounces = warmup.current.warmup_bounces_received_count;
-                          const change = warmup.changes.warmup_bounces_received_count;
-                          return (
-                            <div className={`flex flex-col items-center ${bounces > 0 ? 'text-red-600' : 'text-gray-600'}`}>
-                              <span className="font-medium">{bounces}</span>
-                              {change > 0 && (
-                                <span className="text-xs text-red-600">+{change}</span>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </td>
-                      <td className="p-4 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          {trend && trend.replyRates.length > 1 ? (
-                            <EnhancedSparkline data={trend.replyRates} width={70} height={24} />
-                          ) : (
-                            <span className="text-xs text-gray-400">—</span>
-                          )}
+                      {/* Activity — sent / replies merged */}
+                      <td className="p-3 text-right">
+                        <div className="text-sm text-gray-700">
+                          {(email.totalSent || email.sentLast7Days).toLocaleString()} sent
                         </div>
-                      </td>
-                      <td className="p-4 text-right text-gray-600 font-medium">
-                        {(email.totalSent || email.sentLast7Days).toLocaleString()}
-                      </td>
-                      <td className="p-4 text-right text-gray-600 font-medium">
-                        {(email.totalReplies || email.repliesLast7Days).toLocaleString()}
+                        <div className="text-xs text-gray-400">
+                          {(email.totalReplies || email.repliesLast7Days).toLocaleString()} replies
+                        </div>
                       </td>
                     </tr>
                   );
@@ -2177,7 +1751,7 @@ function EmailsPageContent() {
         <div className="text-xs lg:text-sm text-gray-500">
           Showing {((page - 1) * pageSize) + 1} - {Math.min(page * pageSize, total)} of {total.toLocaleString()}
           {sortBy === "replyRate" && sortOrder === "asc" && (
-            <span className="text-orange-600 ml-2">• ⚠️ Sorted by lowest reply rate</span>
+            <span className="text-orange-600 ml-2">• ⚠️ Sorted by lowest warmup reply rate</span>
           )}
         </div>
         <div className="flex gap-2">
@@ -2261,8 +1835,8 @@ export default function EmailsPage() {
     <Suspense fallback={
       <div className="p-4 lg:p-8">
         <div className="mb-6 lg:mb-8">
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">📧 Accounts</h1>
-          <p className="text-gray-500 mt-1 text-sm lg:text-base">Loading...</p>
+          <h1 className="text-2xl font-bold text-gray-900">Accounts</h1>
+          <p className="text-gray-500 mt-1 text-sm">Loading...</p>
         </div>
       </div>
     }>

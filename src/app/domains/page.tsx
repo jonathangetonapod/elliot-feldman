@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { getMockDomainHealth, DomainHealth } from "@/lib/mock-data";
 import { exportToCSV, DOMAINS_COLUMNS } from "@/lib/export-csv";
+import { InfoTooltip } from "@/components/info-tooltip";
 
 type DataMode = "live" | "demo";
 
@@ -210,6 +211,7 @@ export default function DomainsPage() {
               <Badge className="bg-yellow-100 text-yellow-800">Demo Mode</Badge>
             )}
           </div>
+          <p className="text-gray-500 mt-1 text-sm">Check that your sending domains are properly configured and not blacklisted.</p>
           <p className="text-gray-500 mt-1 text-sm lg:text-base">
             Monitor domain reputation and authentication
             {dataMode === "demo" && (
@@ -398,7 +400,7 @@ export default function DomainsPage() {
                   
                   <div className="grid grid-cols-2 gap-3 text-xs mb-3">
                     <div>
-                      <div className="text-gray-500">Spam Score</div>
+                      <div className="text-gray-500 flex items-center">Spam Score<InfoTooltip text="Score from 1-10. 1-3: Good. 4-6: Watch closely. 7-10: Critical — domain reputation is at risk." /></div>
                       <div className={`font-medium ${
                         domain.spamScore > 5 ? "text-red-600" :
                         domain.spamScore > 3 ? "text-yellow-600" : "text-green-600"
@@ -407,7 +409,7 @@ export default function DomainsPage() {
                       </div>
                     </div>
                     <div>
-                      <div className="text-gray-500">Inbox Rate</div>
+                      <div className="text-gray-500 flex items-center">Inbox Rate<InfoTooltip text="% of emails that land in the inbox instead of spam. Target: above 90%." /></div>
                       <div className={`font-medium ${
                         domain.inboxPlacementRate < 70 ? "text-red-600" :
                         domain.inboxPlacementRate < 85 ? "text-yellow-600" : "text-green-600"
@@ -419,12 +421,12 @@ export default function DomainsPage() {
                   
                   <div className="flex justify-between items-center pt-3 border-t">
                     <div className="flex gap-3 text-xs">
-                      <span>SPF {domain.spfValid ? "✅" : "❌"}</span>
-                      <span>DKIM {domain.dkimValid ? "✅" : "❌"}</span>
-                      <span>DMARC {domain.dmarcValid ? "✅" : "❌"}</span>
+                      <span className="flex items-center">SPF<InfoTooltip text="Sender Policy Framework — tells email providers which servers can send email from your domain. Must be valid." /> {domain.spfValid ? "✅" : "❌"}</span>
+                      <span className="flex items-center">DKIM<InfoTooltip text="DomainKeys Identified Mail — adds a digital signature to verify emails aren't tampered with. Must be valid." /> {domain.dkimValid ? "✅" : "❌"}</span>
+                      <span className="flex items-center">DMARC<InfoTooltip text="Domain-based Message Authentication — tells providers what to do with emails that fail SPF/DKIM. Must be valid." /> {domain.dmarcValid ? "✅" : "❌"}</span>
                     </div>
                     {domain.blacklistStatus === "listed" && (
-                      <Badge variant="destructive" className="text-xs">Blacklisted</Badge>
+                      <Badge variant="destructive" className="text-xs flex items-center">Blacklisted<InfoTooltip text="Email blacklists track domains that send spam. If your domain is listed, some providers may reject your emails. Request delisting to fix." /></Badge>
                     )}
                   </div>
                 </CardContent>
@@ -442,12 +444,12 @@ export default function DomainsPage() {
                       <th className="text-left p-4 font-medium text-sm text-gray-600">Domain</th>
                       <th className="text-center p-4 font-medium text-sm text-gray-600">Emails</th>
                       <th className="text-center p-4 font-medium text-sm text-gray-600">Health</th>
-                      <th className="text-center p-4 font-medium text-sm text-gray-600">Spam Score</th>
-                      <th className="text-center p-4 font-medium text-sm text-gray-600">Blacklist</th>
-                      <th className="text-center p-4 font-medium text-sm text-gray-600">SPF</th>
-                      <th className="text-center p-4 font-medium text-sm text-gray-600">DKIM</th>
-                      <th className="text-center p-4 font-medium text-sm text-gray-600">DMARC</th>
-                      <th className="text-center p-4 font-medium text-sm text-gray-600">Inbox Rate</th>
+                      <th className="text-center p-4 font-medium text-sm text-gray-600"><span className="inline-flex items-center justify-center">Spam Score<InfoTooltip text="Score from 1-10. 1-3: Good. 4-6: Watch closely. 7-10: Critical — domain reputation is at risk." /></span></th>
+                      <th className="text-center p-4 font-medium text-sm text-gray-600"><span className="inline-flex items-center justify-center">Blacklist<InfoTooltip text="Email blacklists track domains that send spam. If your domain is listed, some providers may reject your emails. Request delisting to fix." /></span></th>
+                      <th className="text-center p-4 font-medium text-sm text-gray-600"><span className="inline-flex items-center justify-center">SPF<InfoTooltip text="Sender Policy Framework — tells email providers which servers can send email from your domain. Must be valid." /></span></th>
+                      <th className="text-center p-4 font-medium text-sm text-gray-600"><span className="inline-flex items-center justify-center">DKIM<InfoTooltip text="DomainKeys Identified Mail — adds a digital signature to verify emails aren't tampered with. Must be valid." /></span></th>
+                      <th className="text-center p-4 font-medium text-sm text-gray-600"><span className="inline-flex items-center justify-center">DMARC<InfoTooltip text="Domain-based Message Authentication — tells providers what to do with emails that fail SPF/DKIM. Must be valid." /></span></th>
+                      <th className="text-center p-4 font-medium text-sm text-gray-600"><span className="inline-flex items-center justify-center">Inbox Rate<InfoTooltip text="% of emails that land in the inbox instead of spam. Target: above 90%." /></span></th>
                     </tr>
                   </thead>
                   <tbody>

@@ -1,11 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMemo, useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
+import { InfoTooltip } from "@/components/info-tooltip";
 import {
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -14,11 +12,8 @@ import {
   ReferenceLine,
   Area,
   ComposedChart,
+  Line,
 } from "recharts";
-import {
-  getHealthLabel,
-  type HistoricalTrendAnalysis,
-} from "@/lib/account-history";
 
 // Types
 export interface AccountDetailData {
@@ -27,27 +22,17 @@ export interface AccountDetailData {
   name: string;
   domain: string;
   status: string;
-  
+
   // Warmup info
   warmupEnabled: boolean;
-  warmupStatus: "warming" | "ready" | "paused";
-  warmupDay: number;
   dailyLimit: number;
-  currentVolume?: number;
-  
-  // Reply stats
-  replyRate: number;
+
+  // Campaign stats (lifetime from Bison sender-emails endpoint)
   totalSent: number;
   totalReplies: number;
-  sentLast7Days: number;
-  repliesLast7Days: number;
-  
+
   // Timestamps
   createdAt: string;
-  lastSyncedAt?: string;
-  
-  // Trend analysis (if available)
-  trendAnalysis: HistoricalTrendAnalysis | null;
 }
 
 interface AccountDetailModalProps {
@@ -66,25 +51,6 @@ function formatDate(dateStr: string, options?: Intl.DateTimeFormatOptions): stri
   }
 }
 
-// Format relative time
-function formatRelativeTime(dateStr: string): string {
-  try {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    
-    if (diffDays === 0) return "Today";
-    if (diffDays === 1) return "Yesterday";
-    if (diffDays < 7) return `${diffDays} days ago`;
-    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
-    if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
-    return `${Math.floor(diffDays / 365)} years ago`;
-  } catch {
-    return dateStr;
-  }
-}
-
 // Calculate days since creation
 function getDaysActive(createdAt: string): number {
   try {
@@ -96,141 +62,94 @@ function getDaysActive(createdAt: string): number {
   }
 }
 
-// Stat card component
-function StatCard({ label, value, subValue, icon, color = "gray" }: {
-  label: string;
-  value: string | number;
-  subValue?: string;
-  icon: string;
-  color?: "gray" | "green" | "yellow" | "red" | "blue" | "orange" | "purple";
-}) {
-  const colorClasses = {
-    gray: "bg-gray-50 border-gray-200",
-    green: "bg-green-50 border-green-200",
-    yellow: "bg-yellow-50 border-yellow-200",
-    red: "bg-red-50 border-red-200",
-    blue: "bg-blue-50 border-blue-200",
-    orange: "bg-orange-50 border-orange-200",
-    purple: "bg-purple-50 border-purple-200",
-  };
-  
-  const textColorClasses = {
-    gray: "text-gray-700",
-    green: "text-green-700",
-    yellow: "text-yellow-700",
-    red: "text-red-700",
-    blue: "text-blue-700",
-    orange: "text-orange-700",
-    purple: "text-purple-700",
-  };
-
-  return (
-    <div className={`rounded-lg border p-3 ${colorClasses[color]}`}>
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-lg">{icon}</span>
-        <span className="text-xs text-gray-500 font-medium">{label}</span>
-      </div>
-      <div className={`text-xl font-bold ${textColorClasses[color]}`}>{value}</div>
-      {subValue && <div className="text-xs text-gray-500 mt-0.5">{subValue}</div>}
-    </div>
-  );
-}
-
-// Trend chart component
-function TrendChart({ data, baselineAvg }: { 
-  data: { date: string; rate: number }[]; 
-  baselineAvg: number;
-}) {
+// Weekly history chart component
+function WeeklyHistoryChart({ data }: { data: { week: number; label: string; warmupReplyRate: number; warmupEmailsSent: number }[] }) {
   const chartData = useMemo(() => {
-    if (!data || data.length === 0) return [];
-    return [...data]
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map(d => ({
-        date: d.date,
-        displayDate: formatDate(d.date, { month: 'short', day: 'numeric' }),
-        rate: d.rate,
-      }));
+    return data.map((d, i) => ({
+      label: `W${i + 1}`,
+      fullLabel: d.label,
+      rate: d.warmupReplyRate,
+      sent: d.warmupEmailsSent,
+    }));
   }, [data]);
 
   if (chartData.length < 2) {
     return (
-      <div className="h-48 flex items-center justify-center text-gray-400">
-        <div className="text-center">
-          <span className="text-4xl block mb-2">📊</span>
-          <span>Gathering trend data...</span>
-          <div className="text-xs mt-1">{chartData.length} day(s) of data</div>
-        </div>
+      <div className="h-48 flex items-center justify-center text-gray-400 text-sm">
+        Not enough data for chart
       </div>
     );
   }
 
-  // Determine trend color
-  const firstValue = chartData[0]?.rate || 0;
-  const lastValue = chartData[chartData.length - 1]?.rate || 0;
-  const isUp = lastValue > firstValue + 0.3;
-  const isDown = lastValue < firstValue - 0.3;
-  const color = isUp ? '#22c55e' : isDown ? '#ef4444' : '#3b82f6';
+  const firstNonZero = chartData.find(d => d.rate > 0);
+  const lastNonZero = [...chartData].reverse().find(d => d.rate > 0);
+  const isUp = firstNonZero && lastNonZero && lastNonZero.rate > firstNonZero.rate;
+  const isDown = firstNonZero && lastNonZero && lastNonZero.rate < firstNonZero.rate * 0.8;
+  const lineColor = isUp ? '#22c55e' : isDown ? '#ef4444' : '#3b82f6';
 
   return (
-    <div className="h-48">
+    <div className="h-52">
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
           <defs>
-            <linearGradient id="trendGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor={color} stopOpacity={0.3}/>
-              <stop offset="95%" stopColor={color} stopOpacity={0}/>
+            <linearGradient id="weeklyGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor={lineColor} stopOpacity={0.3}/>
+              <stop offset="95%" stopColor={lineColor} stopOpacity={0}/>
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-          <XAxis 
-            dataKey="displayDate" 
+          <XAxis
+            dataKey="label"
             tick={{ fontSize: 10, fill: '#6b7280' }}
             tickLine={false}
             axisLine={{ stroke: '#e5e7eb' }}
-            interval="preserveStartEnd"
+            interval={0}
+            height={24}
           />
-          <YAxis 
+          <YAxis
             tick={{ fontSize: 10, fill: '#6b7280' }}
             tickLine={false}
             axisLine={false}
             tickFormatter={(v) => `${v}%`}
-            domain={['auto', 'auto']}
+            domain={[0, 'auto']}
           />
-          <Tooltip 
-            formatter={(value) => [`${Number(value).toFixed(2)}%`, 'Reply Rate']}
-            labelFormatter={(label) => `Date: ${label}`}
-            contentStyle={{ 
-              borderRadius: '8px', 
+          <Tooltip
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            formatter={((value: any, name: any) => {
+              if (name === 'rate' && typeof value === 'number') return [`${value.toFixed(1)}%`, 'WU Reply Rate'];
+              return [value ?? 0, name ?? ''];
+            }) as any}
+            labelFormatter={(label, payload) => {
+              const item = payload?.[0]?.payload;
+              return item?.fullLabel || label;
+            }}
+            contentStyle={{
+              borderRadius: '8px',
               border: '1px solid #e5e7eb',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+              fontSize: '12px',
             }}
           />
-          {baselineAvg > 0 && (
-            <ReferenceLine 
-              y={baselineAvg} 
-              stroke="#9ca3af" 
-              strokeDasharray="5 5" 
-              label={{ 
-                value: `Baseline: ${baselineAvg}%`, 
-                position: 'right',
-                fontSize: 10,
-                fill: '#9ca3af'
-              }} 
-            />
-          )}
-          <Area 
-            type="monotone" 
-            dataKey="rate" 
-            fill="url(#trendGradient)"
+          <ReferenceLine
+            y={20}
+            stroke="#22c55e"
+            strokeDasharray="4 4"
+            strokeOpacity={0.5}
+            label={{ value: '20% (healthy)', position: 'right', fontSize: 9, fill: '#22c55e' }}
+          />
+          <Area
+            type="monotone"
+            dataKey="rate"
+            fill="url(#weeklyGradient)"
             stroke="none"
           />
-          <Line 
-            type="monotone" 
-            dataKey="rate" 
-            stroke={color}
-            strokeWidth={2}
-            dot={{ r: 3, fill: color }}
-            activeDot={{ r: 6, stroke: color, strokeWidth: 2, fill: 'white' }}
+          <Line
+            type="monotone"
+            dataKey="rate"
+            stroke={lineColor}
+            strokeWidth={2.5}
+            dot={{ r: 4, fill: lineColor, stroke: 'white', strokeWidth: 2 }}
+            activeDot={{ r: 7, stroke: lineColor, strokeWidth: 2, fill: 'white' }}
           />
         </ComposedChart>
       </ResponsiveContainer>
@@ -238,389 +157,270 @@ function TrendChart({ data, baselineAvg }: {
   );
 }
 
-// Warmup progress bar
-function WarmupProgressBar({ dailyLimit, warmupEnabled }: { dailyLimit: number; warmupEnabled: boolean }) {
-  // Stages: 5-10 (🔴) → 11-20 (🟠) → 21-35 (🟡) → 36-50 (🟢)
-  const stages = [
-    { min: 5, max: 10, emoji: "🔴", label: "Starting", color: "bg-red-500" },
-    { min: 11, max: 20, emoji: "🟠", label: "Growing", color: "bg-orange-500" },
-    { min: 21, max: 35, emoji: "🟡", label: "Maturing", color: "bg-yellow-500" },
-    { min: 36, max: 50, emoji: "🟢", label: "Ready", color: "bg-green-500" },
-  ];
-
-  const currentStageIndex = dailyLimit <= 10 ? 0 : dailyLimit <= 20 ? 1 : dailyLimit <= 35 ? 2 : 3;
-  const progress = Math.min((dailyLimit / 50) * 100, 100);
-
-  return (
-    <div className="space-y-2">
-      {/* Progress bar */}
-      <div className="h-3 bg-gray-200 rounded-full overflow-hidden">
-        <div 
-          className={`h-full transition-all duration-500 ${stages[currentStageIndex].color}`}
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-      
-      {/* Stage indicators */}
-      <div className="flex justify-between text-xs">
-        {stages.map((stage, idx) => (
-          <div 
-            key={idx}
-            className={`flex items-center gap-1 ${
-              idx <= currentStageIndex && warmupEnabled ? 'text-gray-700' : 'text-gray-400'
-            }`}
-          >
-            <span>{stage.emoji}</span>
-            <span className="hidden sm:inline">{stage.label}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+// Weekly history data point
+interface WeeklyDataPoint {
+  week: number;
+  label: string;
+  startDate: string;
+  endDate: string;
+  warmupReplyRate: number;
+  warmupEmailsSent: number;
+  warmupRepliesReceived: number;
+  warmupScore: number;
+  warmupBounces: number;
 }
 
-// Activity timeline item
-function TimelineItem({ date, event, icon }: { date: string; event: string; icon: string }) {
-  return (
-    <div className="flex items-start gap-3 pb-3 border-l-2 border-gray-200 pl-4 ml-2 relative">
-      <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-white border-2 border-gray-300 flex items-center justify-center text-xs">
-        {icon}
-      </div>
-      <div className="flex-1">
-        <div className="text-sm text-gray-700">{event}</div>
-        <div className="text-xs text-gray-400">{date}</div>
-      </div>
-    </div>
-  );
+// Fresh account details from the history API (more up-to-date than props)
+interface FreshAccountDetails {
+  id: number;
+  name?: string;
+  email: string;
+  createdAt: string;
+  warmupEnabled: boolean;
+  dailyLimit: number;
+  status: string;
+  emailsSent: number;
+  totalReplies: number;
+  uniqueReplies: number;
+  totalOpened: number;
+  bounced: number;
+  unsubscribed: number;
+  leadsContacted: number;
+  interestedLeads: number;
+  tags?: { id: number; name: string }[];
 }
 
 export function AccountDetailModal({ account, isOpen, onClose }: AccountDetailModalProps) {
+  const [weeklyHistory, setWeeklyHistory] = useState<WeeklyDataPoint[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [freshDetails, setFreshDetails] = useState<FreshAccountDetails | null>(null);
+  const [fetchedAt, setFetchedAt] = useState<Date | null>(null);
+
+  // Fetch weekly history when modal opens
+  useEffect(() => {
+    if (!isOpen || !account) {
+      setWeeklyHistory([]);
+      setFreshDetails(null);
+      return;
+    }
+
+    async function fetchHistory() {
+      setHistoryLoading(true);
+      try {
+        const params = new URLSearchParams({ email: account!.email });
+        if (account!.id) params.set('id', String(account!.id));
+        const res = await fetch(`/api/bison/warmup/history?${params}`);
+        if (res.ok) {
+          const data = await res.json();
+          setWeeklyHistory(data.weeks || []);
+          setFetchedAt(new Date());
+          if (data.accountDetails) {
+            setFreshDetails(data.accountDetails);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch weekly history:', err);
+      } finally {
+        setHistoryLoading(false);
+      }
+    }
+
+    fetchHistory();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, account?.email, account?.id]);
+
   if (!isOpen || !account) return null;
 
-  const daysActive = getDaysActive(account.createdAt);
-  const healthInfo = account.trendAnalysis ? getHealthLabel(account.trendAnalysis.health) : null;
-  
-  // Calculate open rate (mock - would come from API)
-  const openRate = account.totalSent > 0 ? Math.min(((account.totalReplies / account.totalSent) * 100 * 3.5), 85) : 0;
-  
-  // Connection status
+  // Prefer fresh data from the history API over stale props
+  const effectiveCreatedAt = freshDetails?.createdAt || account.createdAt;
+  const effectiveDailyLimit = freshDetails?.dailyLimit ?? account.dailyLimit;
+  const effectiveWarmupEnabled = freshDetails?.warmupEnabled ?? account.warmupEnabled;
+  const effectiveTotalSent = freshDetails?.emailsSent ?? account.totalSent;
+  const effectiveTotalReplies = freshDetails?.totalReplies ?? account.totalReplies;
+
+  const daysActive = getDaysActive(effectiveCreatedAt);
   const isConnected = account.status !== 'disconnected';
 
-  // Generate activity timeline
-  const activityItems = [
-    { 
-      date: formatRelativeTime(account.createdAt), 
-      event: "Account created", 
-      icon: "🎂" 
-    },
-  ];
-  
-  if (daysActive > 7 && account.totalSent > 0) {
-    activityItems.push({
-      date: `Day ${Math.min(daysActive, 30)}`,
-      event: `Sent ${account.totalSent.toLocaleString()} emails total`,
-      icon: "📤"
-    });
-  }
-  
-  if (account.totalReplies > 0) {
-    activityItems.push({
-      date: "Recent",
-      event: `Received ${account.totalReplies.toLocaleString()} replies`,
-      icon: "💬"
-    });
-  }
-
-  if (account.trendAnalysis?.health === 'declining') {
-    activityItems.push({
-      date: "This week",
-      event: `Reply rate dropped ${Math.abs(account.trendAnalysis.percentChange)}% from baseline`,
-      icon: "📉"
-    });
-  }
+  // Compute current warmup stats from most recent week WITH actual sends
+  // (the latest calendar week may be incomplete with 0 sends)
+  const weeksWithData = weeklyHistory.filter(w => w.warmupEmailsSent > 0);
+  const latestWeek = weeksWithData.length > 0 ? weeksWithData[weeksWithData.length - 1] : null;
+  const prevWeek = weeksWithData.length > 1 ? weeksWithData[weeksWithData.length - 2] : null;
 
   return (
     <>
       {/* Backdrop */}
-      <div 
+      <div
         className="fixed inset-0 bg-black/50 z-40 lg:bg-black/30"
         onClick={onClose}
       />
-      
+
       {/* Modal/Panel */}
-      <div className="fixed inset-0 z-50 lg:inset-y-0 lg:right-0 lg:left-auto lg:w-[500px] bg-white shadow-2xl overflow-y-auto transition-transform duration-300">
-        {/* Header - Sticky */}
+      <div className="fixed inset-0 z-50 lg:inset-y-0 lg:right-0 lg:left-auto lg:w-[500px] bg-white shadow-2xl overflow-y-auto">
+        {/* Header */}
         <div className="sticky top-0 z-10 bg-white border-b px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <button 
+            <button
               onClick={onClose}
               className="p-1 rounded-full hover:bg-gray-100 transition-colors"
             >
-              <svg className="w-6 h-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
-            <span className="text-lg font-semibold truncate">Account Details</span>
+            <span className="font-semibold truncate">{account.email}</span>
           </div>
-          
-          {/* Connection status badge */}
           <Badge variant="outline" className={`text-xs ${
             isConnected ? 'border-green-200 text-green-700 bg-green-50' : 'border-red-200 text-red-700 bg-red-50'
           }`}>
-            <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+            <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
             {isConnected ? 'Connected' : 'Disconnected'}
           </Badge>
         </div>
 
         {/* Content */}
-        <div className="p-4 space-y-6 pb-8">
-          {/* Account Header */}
-          <div className="space-y-2">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                <h2 className="text-xl font-bold text-gray-900 truncate">{account.email}</h2>
-                <div className="flex items-center gap-2 text-sm text-gray-500 mt-0.5">
-                  <span>{account.name}</span>
-                  <span>•</span>
-                  <span>{account.domain}</span>
-                </div>
-              </div>
-              {healthInfo && (
-                <div className="flex flex-col items-center shrink-0">
-                  <span className="text-2xl">{healthInfo.emoji}</span>
-                  <span className={`text-xs font-medium ${healthInfo.color}`}>{healthInfo.label}</span>
-                </div>
+        <div className="p-4 space-y-5 pb-8">
+          {/* Account info line */}
+          <div>
+            <div className="text-sm text-gray-500 mb-2">{account.name} · {account.domain}</div>
+            <div className="flex flex-wrap gap-1.5 items-center">
+              <Badge variant="outline" className="text-xs">{daysActive}d active</Badge>
+              <Badge variant="outline" className={`text-xs ${effectiveWarmupEnabled ? 'border-green-200 bg-green-50 text-green-700' : ''}`}>
+                Warmup {effectiveWarmupEnabled ? 'ON' : 'OFF'}
+              </Badge>
+              <Badge variant="outline" className="text-xs">{effectiveDailyLimit}/day limit</Badge>
+              {effectiveTotalSent > 0 && (
+                <span className="inline-flex items-center">
+                  <Badge variant="outline" className="text-xs">
+                    {effectiveTotalSent.toLocaleString()} sent · {effectiveTotalReplies.toLocaleString()} replies
+                  </Badge>
+                  <InfoTooltip text={`Campaign sends (lifetime): ${effectiveTotalSent.toLocaleString()} emails sent, ${effectiveTotalReplies.toLocaleString()} replies, ${((effectiveTotalReplies / effectiveTotalSent) * 100).toFixed(1)}% reply rate. Campaign reply rates of 0.5–5% are normal for cold email.`} />
+                </span>
               )}
-            </div>
-            
-            {/* Quick badges */}
-            <div className="flex flex-wrap gap-2">
-              <Badge variant="outline" className="text-xs">
-                🗓️ {daysActive} days active
-              </Badge>
-              <Badge variant="outline" className={`text-xs ${
-                account.warmupEnabled ? 'border-orange-200 bg-orange-50 text-orange-700' : 'border-gray-200'
-              }`}>
-                {account.warmupEnabled ? '🔥 Warmup ON' : '⏸️ Warmup OFF'}
-              </Badge>
-              <Badge variant="outline" className="text-xs">
-                📊 {account.dailyLimit}/day limit
-              </Badge>
             </div>
           </div>
 
-          {/* Reply Stats Section */}
-          <Card>
-            <CardHeader className="pb-2 px-4">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                💬 Reply Statistics
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="px-4">
-              <div className="grid grid-cols-2 gap-3">
-                <StatCard 
-                  icon="📤" 
-                  label="Emails Sent" 
-                  value={account.totalSent.toLocaleString()}
-                  subValue="all time"
-                  color="blue"
-                />
-                <StatCard 
-                  icon="💬" 
-                  label="Replies" 
-                  value={account.totalReplies.toLocaleString()}
-                  subValue="total received"
-                  color="green"
-                />
-                <StatCard 
-                  icon="📈" 
-                  label="Reply Rate" 
-                  value={`${account.replyRate}%`}
-                  subValue={account.replyRate >= 2 ? "Healthy" : account.replyRate >= 1 ? "Warning" : "Critical"}
-                  color={account.replyRate >= 2 ? "green" : account.replyRate >= 1 ? "yellow" : "red"}
-                />
-                <StatCard 
-                  icon="👀" 
-                  label="Est. Open Rate" 
-                  value={`${openRate.toFixed(1)}%`}
-                  subValue="estimated"
-                  color="purple"
-                />
-              </div>
-              
-              {/* Additional stats row */}
-              <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t">
-                <div className="text-center">
-                  <div className="text-xs text-gray-500">📨 Last 7 Days</div>
-                  <div className="font-semibold text-sm">{account.sentLast7Days} sent</div>
-                </div>
-                <div className="text-center border-x">
-                  <div className="text-xs text-gray-500">💬 7-Day Replies</div>
-                  <div className="font-semibold text-sm">{account.repliesLast7Days}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-xs text-gray-500">📊 7-Day Rate</div>
-                  <div className="font-semibold text-sm">
-                    {account.sentLast7Days > 0 
-                      ? ((account.repliesLast7Days / account.sentLast7Days) * 100).toFixed(1) 
-                      : "0"}%
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          {/* Plain-English verdict — action-oriented, no numbers */}
+          {!historyLoading && weeksWithData.length > 0 && (() => {
+            const latestRate = latestWeek?.warmupReplyRate ?? 0;
+            const wowChange = prevWeek && latestWeek
+              ? latestWeek.warmupReplyRate - prevWeek.warmupReplyRate
+              : 0;
+            const latestBounceRate = latestWeek && latestWeek.warmupEmailsSent > 0
+              ? (latestWeek.warmupBounces / latestWeek.warmupEmailsSent) * 100 : 0;
 
-          {/* Warmup Stats Section */}
-          <Card>
-            <CardHeader className="pb-2 px-4">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                🔥 Warmup Status
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="px-4 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <StatCard 
-                  icon={account.warmupEnabled ? "✅" : "⏸️"}
-                  label="Warmup" 
-                  value={account.warmupEnabled ? "ON" : "OFF"}
-                  color={account.warmupEnabled ? "green" : "gray"}
-                />
-                <StatCard 
-                  icon="📊" 
-                  label="Daily Limit" 
-                  value={`${account.dailyLimit}/day`}
-                  subValue={account.currentVolume ? `${account.currentVolume} sent today` : undefined}
-                  color="blue"
-                />
-              </div>
-              
-              {/* Warmup progress */}
-              <div className="pt-2">
-                <div className="text-xs text-gray-500 mb-2">Warmup Progress</div>
-                <WarmupProgressBar dailyLimit={account.dailyLimit} warmupEnabled={account.warmupEnabled} />
-              </div>
-              
-              {/* Warmup stage info */}
-              <div className="grid grid-cols-2 gap-3 pt-2 border-t">
-                <div>
-                  <div className="text-xs text-gray-500 mb-1">Stage</div>
-                  <div className="font-medium text-sm">
-                    {account.dailyLimit <= 10 ? '🔴 Starting' : 
-                     account.dailyLimit <= 20 ? '🟠 Growing' : 
-                     account.dailyLimit <= 35 ? '🟡 Maturing' : '🟢 Ready'}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs text-gray-500 mb-1">Days Warming</div>
-                  <div className="font-medium text-sm">{Math.min(daysActive, 30)} days</div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+            let verdict: { text: string; action: string; color: string; bg: string };
 
-          {/* Trend Section */}
-          <Card>
-            <CardHeader className="pb-2 px-4">
-              <CardTitle className="text-sm font-semibold flex items-center justify-between">
-                <span className="flex items-center gap-2">📉 Reply Rate Trend</span>
-                {account.trendAnalysis && account.trendAnalysis.health !== 'gathering-data' && (
-                  <span className={`text-xs font-normal px-2 py-0.5 rounded-full ${
-                    account.trendAnalysis.percentChange > 0 ? 'bg-green-100 text-green-700' :
-                    account.trendAnalysis.percentChange < 0 ? 'bg-red-100 text-red-700' :
-                    'bg-gray-100 text-gray-700'
-                  }`}>
-                    {account.trendAnalysis.percentChange > 0 ? '↑' : account.trendAnalysis.percentChange < 0 ? '↓' : '→'}
-                    {' '}{Math.abs(account.trendAnalysis.percentChange)}% from baseline
-                  </span>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="px-4">
-              {/* Trend comparison */}
-              {account.trendAnalysis && account.trendAnalysis.health !== 'gathering-data' && (
-                <div className="grid grid-cols-3 gap-2 mb-4 p-3 bg-gray-50 rounded-lg">
-                  <div className="text-center">
-                    <div className="text-xs text-gray-500">Baseline (14d)</div>
-                    <div className="font-bold text-gray-700">{account.trendAnalysis.baselineAvg}%</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-xs text-gray-500">Current (7d)</div>
-                    <div className={`font-bold ${
-                      account.trendAnalysis.currentAvg > account.trendAnalysis.baselineAvg ? 'text-green-600' : 
-                      account.trendAnalysis.currentAvg < account.trendAnalysis.baselineAvg ? 'text-red-600' : 
-                      'text-gray-700'
-                    }`}>
-                      {account.trendAnalysis.currentAvg}%
+            if (latestRate >= 20 && latestBounceRate < 2) {
+              verdict = {
+                text: 'Healthy — no action needed',
+                action: wowChange > 2 ? 'Reply rate is climbing. Keep current settings.' : wowChange < -5 ? 'Slight dip this week — check again next week.' : 'Everything looks good. Keep sending.',
+                color: 'text-green-700',
+                bg: 'bg-green-50 border-green-200',
+              };
+            } else if (latestRate >= 10) {
+              verdict = {
+                text: 'Needs watching — monitor this week',
+                action: 'Reply rate is below the 20% healthy threshold. If it keeps dropping, consider pausing campaigns from this account.',
+                color: 'text-yellow-700',
+                bg: 'bg-yellow-50 border-yellow-200',
+              };
+            } else {
+              verdict = {
+                text: 'At risk — consider pausing this account',
+                action: 'Email providers may be losing trust. Pause campaigns and let warmup recover, or rotate to a different domain.',
+                color: 'text-red-700',
+                bg: 'bg-red-50 border-red-200',
+              };
+            }
+
+            return (
+              <div className={`p-3 rounded-lg border ${verdict.bg}`}>
+                <div className={`text-sm font-semibold ${verdict.color}`}>{verdict.text}</div>
+                <div className="text-xs text-gray-600 mt-1">{verdict.action}</div>
+              </div>
+            );
+          })()}
+
+          {/* 3 key numbers: reply rate, week-over-week change, bounce rate */}
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div>
+              <div className={`text-2xl font-bold ${
+                (latestWeek?.warmupReplyRate ?? 0) >= 20 ? 'text-green-600' :
+                (latestWeek?.warmupReplyRate ?? 0) >= 10 ? 'text-yellow-600' :
+                latestWeek ? 'text-red-600' : 'text-gray-400'
+              }`}>
+                {latestWeek ? `${latestWeek.warmupReplyRate.toFixed(1)}%` : '-'}
+              </div>
+              <div className="text-xs text-gray-500 mt-1">reply rate</div>
+              <div className="text-xs text-gray-400 mt-0.5">this week</div>
+            </div>
+            <div>
+              {prevWeek && latestWeek ? (() => {
+                const change = latestWeek.warmupReplyRate - prevWeek.warmupReplyRate;
+                const isUp = change > 0;
+                const isDown = change < 0;
+                return (
+                  <>
+                    <div className={`text-2xl font-bold ${isUp ? 'text-green-600' : isDown ? 'text-red-600' : 'text-gray-400'}`}>
+                      {isUp ? '+' : ''}{change.toFixed(1)}
                     </div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-xs text-gray-500">Change</div>
-                    <div className={`font-bold ${
-                      account.trendAnalysis.percentChange > 0 ? 'text-green-600' : 
-                      account.trendAnalysis.percentChange < 0 ? 'text-red-600' : 
-                      'text-gray-700'
-                    }`}>
-                      {account.trendAnalysis.percentChange > 0 ? '+' : ''}{account.trendAnalysis.percentChange}%
-                    </div>
-                  </div>
-                </div>
+                    <div className="text-xs text-gray-500 mt-1">pts change</div>
+                    <div className="text-xs text-gray-400 mt-0.5">vs last week</div>
+                  </>
+                );
+              })() : (
+                <>
+                  <div className="text-2xl font-bold text-gray-400">-</div>
+                  <div className="text-xs text-gray-500 mt-1">pts change</div>
+                  <div className="text-xs text-gray-400 mt-0.5">no prior week</div>
+                </>
               )}
-              
-              {/* Chart */}
-              <TrendChart 
-                data={account.trendAnalysis?.replyRates || []} 
-                baselineAvg={account.trendAnalysis?.baselineAvg || 0}
-              />
-              
-              {/* Trend indicator legend */}
-              <div className="flex justify-center gap-4 mt-3 text-xs text-gray-500">
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                  Improving
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                  Stable
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                  Declining
-                </span>
-              </div>
-            </CardContent>
-          </Card>
+            </div>
+            <div>
+              {(() => {
+                const bounceRate = latestWeek && latestWeek.warmupEmailsSent > 0
+                  ? (latestWeek.warmupBounces / latestWeek.warmupEmailsSent) * 100 : 0;
+                return (
+                  <>
+                    <div className={`text-2xl font-bold ${bounceRate > 2 ? 'text-red-600' : bounceRate > 0 ? 'text-yellow-600' : 'text-gray-800'}`}>
+                      {latestWeek ? `${bounceRate.toFixed(1)}%` : '-'}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">bounce rate</div>
+                    <div className="text-xs text-gray-400 mt-0.5">this week</div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
 
-          {/* Activity Timeline */}
-          <Card>
-            <CardHeader className="pb-2 px-4">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                📅 Activity Timeline
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="px-4">
-              <div className="pt-2">
-                {activityItems.map((item, idx) => (
-                  <TimelineItem 
-                    key={idx}
-                    date={item.date}
-                    event={item.event}
-                    icon={item.icon}
-                  />
-                ))}
-                
-                {/* Created date */}
-                <div className="flex items-start gap-3 pl-4 ml-2">
-                  <div className="absolute -left-[9px] w-4 h-4 rounded-full bg-gray-200"></div>
-                  <div className="text-xs text-gray-400">
-                    Created on {formatDate(account.createdAt)}
-                  </div>
-                </div>
+          {/* Reply rate trend chart */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold text-gray-700">Reply Rate Over Time</span>
+              <span className="text-xs text-gray-400">{weeksWithData.length} weeks of data</span>
+            </div>
+            {historyLoading ? (
+              <div className="h-48 flex items-center justify-center text-gray-400">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-400 mx-auto" />
               </div>
-            </CardContent>
-          </Card>
-          
+            ) : weeklyHistory.length > 0 ? (
+              <WeeklyHistoryChart data={weeklyHistory} />
+            ) : (
+              <div className="h-32 flex items-center justify-center text-gray-400 text-sm">
+                No history available yet
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="text-xs text-gray-400 pt-2 border-t flex justify-between">
+            <span>Created {formatDate(effectiveCreatedAt)}</span>
+            {fetchedAt && <span>Synced {fetchedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+          </div>
+
           {/* Close button for mobile */}
-          <button 
+          <button
             onClick={onClose}
             className="w-full py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors lg:hidden"
           >

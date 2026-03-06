@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { generateMockEmails } from "@/lib/mock-data";
 import { useBisonData } from "@/lib/use-bison-data";
+import { InfoTooltip } from "@/components/info-tooltip";
 import {
   fetchWarmupStats,
   type WarmupAccountComparison,
@@ -88,6 +89,7 @@ const STATUS_CONFIG = {
   action: {
     emoji: '🔥',
     label: 'Needs Action',
+    description: 'Warmup reply rate dropped >30%',
     bgCard: 'bg-red-100',
     bgLight: 'bg-red-50',
     border: 'border-red-300',
@@ -97,6 +99,7 @@ const STATUS_CONFIG = {
   watch: {
     emoji: '⚠️',
     label: 'Watch',
+    description: 'Reply rate dropped 10-30%',
     bgCard: 'bg-amber-100',
     bgLight: 'bg-amber-50',
     border: 'border-amber-300',
@@ -106,6 +109,7 @@ const STATUS_CONFIG = {
   healthy: {
     emoji: '✅',
     label: 'Healthy',
+    description: 'Reply rate stable or improving',
     bgCard: 'bg-green-100',
     bgLight: 'bg-green-50',
     border: 'border-green-300',
@@ -188,6 +192,9 @@ function SummaryCard({
         <div className="text-6xl lg:text-7xl font-black mb-3">{count}</div>
         <div className="text-base lg:text-lg font-bold uppercase tracking-wide">
           {config.label}
+        </div>
+        <div className="text-xs mt-1 opacity-75 font-normal normal-case tracking-normal">
+          {config.description}
         </div>
       </div>
     </button>
@@ -468,7 +475,7 @@ export default function AccountsPage() {
             <h1 className="text-2xl lg:text-3xl font-bold text-gray-900 flex items-center gap-2">
               📧 Accounts
             </h1>
-            
+
             {/* Demo Mode Badge */}
             {useMockData && (
               <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-medium">
@@ -476,6 +483,7 @@ export default function AccountsPage() {
               </span>
             )}
           </div>
+          <p className="text-gray-500 mt-1 text-sm">Quick overview of which accounts need attention based on warmup reply rate changes.</p>
           
           {/* Last Updated + Controls */}
           <div className="flex flex-wrap items-center gap-3 text-sm text-gray-500">
@@ -542,7 +550,7 @@ export default function AccountsPage() {
               <div className="mb-6 p-6 rounded-2xl bg-gradient-to-r from-emerald-100 to-green-100 border-2 border-emerald-200 text-center">
                 <div className="text-4xl mb-2">🎉</div>
                 <h2 className="text-xl font-bold text-emerald-700 mb-1">All accounts healthy!</h2>
-                <p className="text-emerald-600 text-sm">No accounts need attention right now. Great job!</p>
+                <p className="text-emerald-600 text-sm">No accounts have significant warmup reply rate drops. Your sending reputation is in good shape.</p>
               </div>
             )}
 
