@@ -1,225 +1,334 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useState, useEffect, useMemo } from "react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { generateMockEmails } from "@/lib/mock-data";
 import { InfoTooltip } from "@/components/info-tooltip";
 
-// Bison API sender type
-interface BisonSender {
+// Raw Bison sender-emails response
+interface BisonSenderEmail {
   id: number;
   email: string;
+  name: string;
+  status: string;
   warmup_enabled: boolean;
   warmup_limit: number;
   daily_limit: number;
+  emails_sent_count?: number;
+  total_replied_count?: number;
+  unique_replied_count?: number;
   created_at: string;
-  // Additional fields we might get
-  first_name?: string;
-  last_name?: string;
-  reply_rate?: number;
 }
 
-// Processed email type for UI
-interface WarmupEmail {
+// Warmup stats from the warmup API (last 7 days)
+interface WarmupStats {
+  warmupEmailsSent: number;
+  warmupRepliesReceived: number;
+  warmupReplyRate: number;
+  warmupScore: number;
+  warmupBounces: number;
+  warmupSavedFromSpam: number;
+}
+
+type Verdict = "ready" | "on-track" | "needs-attention" | "no-data" | "paused" | "disconnected";
+
+// Processed for display
+interface WarmupAccount {
   id: number;
   email: string;
+  name: string;
   domain: string;
-  warmupStatus: "warming" | "ready" | "paused";
-  warmupDay: number;
-  warmupReadyDate: string;
-  warmupLimit: number;
+  connected: boolean;
+  warmupEnabled: boolean;
   dailyLimit: number;
+  daysActive: number;
+  createdAt: string;
+  totalSent: number;
+  totalReplies: number;
+  warmupStats?: WarmupStats;
+  verdict: Verdict;
+  verdictReasons: string[];
 }
 
-// Calculate warmup day from created_at (days since creation, max 30)
-function calculateWarmupDay(createdAt: string): number {
+function getDaysActive(createdAt: string): number {
   const created = new Date(createdAt);
   const now = new Date();
-  const diffTime = now.getTime() - created.getTime();
-  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-  return Math.min(Math.max(diffDays, 1), 30);
+  return Math.floor((now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-// Calculate ready date (30 days from creation)
-function calculateReadyDate(createdAt: string): string {
-  const created = new Date(createdAt);
-  const readyDate = new Date(created);
-  readyDate.setDate(readyDate.getDate() + 30);
-  return readyDate.toISOString().split("T")[0];
-}
+const MIN_WARMUP_DAYS = 15;
 
-// Transform Bison sender to our UI format
-function transformSender(sender: BisonSender): WarmupEmail {
-  const domain = sender.email.split("@")[1] || "unknown.com";
-  const warmupDay = calculateWarmupDay(sender.created_at);
-  
-  // Determine warmup status
-  let warmupStatus: "warming" | "ready" | "paused";
-  if (!sender.warmup_enabled) {
-    warmupStatus = "paused";
-  } else if (warmupDay >= 30) {
-    warmupStatus = "ready";
+// Determine verdict based on warmup stats + time connected
+function getVerdict(
+  wu: WarmupStats | undefined,
+  connected: boolean,
+  warmupEnabled: boolean,
+  daysActive: number,
+): { verdict: Verdict; reasons: string[] } {
+  if (!connected) return { verdict: "disconnected", reasons: ["Account not connected to Bison"] };
+  if (!warmupEnabled) return { verdict: "paused", reasons: ["Warmup is disabled"] };
+  if (!wu || wu.warmupEmailsSent === 0) return { verdict: "no-data", reasons: ["No warmup activity yet"] };
+
+  const reasons: string[] = [];
+  let problems = 0;
+
+  // Days check: 15+ days minimum
+  if (daysActive >= MIN_WARMUP_DAYS) {
+    reasons.push(`${daysActive} days warming (good)`);
   } else {
-    warmupStatus = "warming";
+    reasons.push(`${daysActive} days warming (need ${MIN_WARMUP_DAYS})`);
+    problems++;
   }
-  
-  return {
-    id: sender.id,
-    email: sender.email,
-    domain,
-    warmupStatus,
-    warmupDay,
-    warmupReadyDate: calculateReadyDate(sender.created_at),
-    warmupLimit: sender.warmup_limit,
-    dailyLimit: sender.daily_limit,
-  };
+
+  // Score check: 90+ is good
+  if (wu.warmupScore >= 90) {
+    reasons.push(`Score ${wu.warmupScore} (good)`);
+  } else if (wu.warmupScore >= 50) {
+    reasons.push(`Score ${wu.warmupScore} (needs improvement)`);
+  } else {
+    reasons.push(`Score ${wu.warmupScore} (low)`);
+    problems++;
+  }
+
+  // Reply rate check: 20%+ is good
+  if (wu.warmupReplyRate >= 20) {
+    reasons.push(`${wu.warmupReplyRate}% reply rate (good)`);
+  } else if (wu.warmupReplyRate >= 10) {
+    reasons.push(`${wu.warmupReplyRate}% reply rate (needs improvement)`);
+  } else {
+    reasons.push(`${wu.warmupReplyRate}% reply rate (low)`);
+    problems++;
+  }
+
+  if (problems === 0 && daysActive >= MIN_WARMUP_DAYS && wu.warmupScore >= 90 && wu.warmupReplyRate >= 20) {
+    return { verdict: "ready", reasons };
+  } else if (problems >= 2) {
+    return { verdict: "needs-attention", reasons };
+  } else {
+    return { verdict: "on-track", reasons };
+  }
+}
+
+const VERDICT_CONFIG: Record<Verdict, { label: string; color: string; bg: string; border: string; badgeClass: string }> = {
+  ready: {
+    label: "Ready",
+    color: "text-green-700",
+    bg: "bg-green-50",
+    border: "border-green-200",
+    badgeClass: "bg-green-600 text-white",
+  },
+  "on-track": {
+    label: "On Track",
+    color: "text-blue-700",
+    bg: "bg-blue-50",
+    border: "border-blue-200",
+    badgeClass: "bg-blue-600 text-white",
+  },
+  "needs-attention": {
+    label: "Needs Attention",
+    color: "text-red-700",
+    bg: "bg-red-50",
+    border: "border-red-200",
+    badgeClass: "bg-red-600 text-white",
+  },
+  "no-data": {
+    label: "No Data",
+    color: "text-gray-500",
+    bg: "bg-gray-50",
+    border: "border-gray-200",
+    badgeClass: "bg-gray-400 text-white",
+  },
+  paused: {
+    label: "Paused",
+    color: "text-gray-500",
+    bg: "bg-gray-50",
+    border: "border-gray-200",
+    badgeClass: "bg-gray-400 text-white",
+  },
+  disconnected: {
+    label: "Disconnected",
+    color: "text-gray-400",
+    bg: "bg-gray-50",
+    border: "border-gray-200",
+    badgeClass: "bg-gray-300 text-gray-600",
+  },
+};
+
+function formatDate(dateStr: string): string {
+  try {
+    return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return dateStr;
+  }
 }
 
 export default function WarmupPage() {
-  const [emails, setEmails] = useState<WarmupEmail[]>([]);
+  const [accounts, setAccounts] = useState<WarmupAccount[]>([]);
   const [loading, setLoading] = useState(true);
-  const [usingMockData, setUsingMockData] = useState(false);
 
   useEffect(() => {
     async function fetchData() {
       setLoading(true);
-      
-      // Get API key from localStorage
-      let apiKey = "";
       try {
-        const storedConfig = localStorage.getItem("elliot-feldman-config");
-        if (storedConfig) {
-          const config = JSON.parse(storedConfig);
-          apiKey = config.bisonApiKey || "";
+        const now = new Date();
+        const weekAgo = new Date(now);
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        const endDate = now.toISOString().split("T")[0];
+        const startDate = weekAgo.toISOString().split("T")[0];
+
+        const [senderResponse, warmupResponse] = await Promise.all([
+          fetch("/api/bison?endpoint=sender-emails"),
+          fetch(`/api/bison/warmup?start_date=${startDate}&end_date=${endDate}`),
+        ]);
+
+        if (!senderResponse.ok) throw new Error(`Sender API error: ${senderResponse.status}`);
+        const senderData = await senderResponse.json();
+        const emails = Array.isArray(senderData) ? senderData : (senderData.data || []);
+
+        // Build warmup stats map by email
+        const warmupMap = new Map<string, WarmupStats>();
+        if (warmupResponse.ok) {
+          const warmupData = await warmupResponse.json();
+          const warmupEmails = Array.isArray(warmupData) ? warmupData : (warmupData.data || []);
+          for (const wu of warmupEmails) {
+            const sent = wu.warmup_emails_sent ?? 0;
+            const replies = wu.warmup_replies_received ?? 0;
+            warmupMap.set(wu.email.toLowerCase(), {
+              warmupEmailsSent: sent,
+              warmupRepliesReceived: replies,
+              warmupReplyRate: sent > 0 ? Math.round((replies / sent) * 10000) / 100 : 0,
+              warmupScore: wu.warmup_score ?? 0,
+              warmupBounces: wu.warmup_bounces_received_count ?? 0,
+              warmupSavedFromSpam: wu.warmup_emails_saved_from_spam ?? 0,
+            });
+          }
         }
-      } catch {
-        console.error("Failed to parse config from localStorage");
-      }
 
-      // If no API key, use mock data
-      if (!apiKey) {
-        console.log("No Bison API key found, using mock data");
-        const mockEmails = generateMockEmails();
-        setEmails(mockEmails.map(e => ({
-          id: e.id,
-          email: e.email,
-          domain: e.domain,
-          warmupStatus: e.warmupStatus,
-          warmupDay: e.warmupDay,
-          warmupReadyDate: e.warmupReadyDate,
-          warmupLimit: e.warmupStatus === "warming" ? e.dailyLimit : 50,
-          dailyLimit: 50,
-        })));
-        setUsingMockData(true);
-        setLoading(false);
-        return;
-      }
+        const transformed = emails.map((sender: BisonSenderEmail) => {
+          const domain = sender.email.split("@")[1] || "unknown.com";
+          const daysActive = getDaysActive(sender.created_at);
+          const connected = sender.status?.toLowerCase() === "connected";
+          const wu = warmupMap.get(sender.email.toLowerCase());
+          const { verdict, reasons } = getVerdict(wu, connected, sender.warmup_enabled, daysActive);
 
-      try {
-        // Fetch sender emails from Bison API
-        const response = await fetch("/api/bison?endpoint=senders", {
-          headers: {
-            "X-Bison-Api-Key": apiKey,
-          },
+          return {
+            id: sender.id,
+            email: sender.email,
+            name: sender.name || sender.email.split("@")[0],
+            domain,
+            connected,
+            warmupEnabled: sender.warmup_enabled,
+            dailyLimit: sender.daily_limit,
+            daysActive,
+            createdAt: sender.created_at,
+            totalSent: sender.emails_sent_count ?? 0,
+            totalReplies: sender.unique_replied_count ?? sender.total_replied_count ?? 0,
+            warmupStats: wu,
+            verdict,
+            verdictReasons: reasons,
+          } as WarmupAccount;
         });
 
-        if (!response.ok) {
-          throw new Error(`API error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        
-        // Handle response - could be array directly or wrapped in data property
-        const senders: BisonSender[] = Array.isArray(data) ? data : (data.data || data.senders || []);
-        
-        if (senders.length === 0) {
-          // No senders from API, fall back to mock
-          console.log("No senders from API, using mock data");
-          const mockEmails = generateMockEmails();
-          setEmails(mockEmails.map(e => ({
-            id: e.id,
-            email: e.email,
-            domain: e.domain,
-            warmupStatus: e.warmupStatus,
-            warmupDay: e.warmupDay,
-            warmupReadyDate: e.warmupReadyDate,
-            warmupLimit: e.warmupStatus === "warming" ? e.dailyLimit : 50,
-            dailyLimit: 50,
-          })));
-          setUsingMockData(true);
-        } else {
-          // Transform API data
-          const transformed = senders.map(transformSender);
-          setEmails(transformed);
-          setUsingMockData(false);
-        }
+        setAccounts(transformed);
       } catch (error) {
-        console.error("Failed to fetch from Bison API:", error);
-        // Fall back to mock data on error
-        const mockEmails = generateMockEmails();
-        setEmails(mockEmails.map(e => ({
-          id: e.id,
-          email: e.email,
-          domain: e.domain,
-          warmupStatus: e.warmupStatus,
-          warmupDay: e.warmupDay,
-          warmupReadyDate: e.warmupReadyDate,
-          warmupLimit: e.warmupStatus === "warming" ? e.dailyLimit : 50,
-          dailyLimit: 50,
-        })));
-        setUsingMockData(true);
+        console.error("Failed to fetch data:", error);
+        setAccounts([]);
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     }
-
     fetchData();
   }, []);
 
-  // Group emails by warmup status
-  const warmingEmails = emails.filter(e => e.warmupStatus === "warming");
-  const readyEmails = emails.filter(e => e.warmupStatus === "ready");
-  const pausedEmails = emails.filter(e => e.warmupStatus === "paused");
-  
-  // Group by ready date (next 30 days)
-  const upcomingByDate: Record<string, typeof warmingEmails> = {};
-  warmingEmails.forEach(email => {
-    const date = email.warmupReadyDate;
-    if (!upcomingByDate[date]) {
-      upcomingByDate[date] = [];
-    }
-    upcomingByDate[date].push(email);
-  });
-  
-  // Sort dates
-  const sortedDates = Object.keys(upcomingByDate).sort();
+  const groups = useMemo(() => {
+    const ready = accounts.filter(a => a.verdict === "ready").sort((a, b) => b.daysActive - a.daysActive);
+    const onTrack = accounts.filter(a => a.verdict === "on-track").sort((a, b) => b.daysActive - a.daysActive);
+    const needsAttention = accounts.filter(a => a.verdict === "needs-attention").sort((a, b) => a.warmupStats?.warmupScore ?? 0 - (b.warmupStats?.warmupScore ?? 0));
+    const noData = accounts.filter(a => a.verdict === "no-data").sort((a, b) => b.daysActive - a.daysActive);
+    const inactive = accounts.filter(a => a.verdict === "paused" || a.verdict === "disconnected");
 
-  const stats = {
-    warming: warmingEmails.length,
-    ready: readyEmails.length,
-    paused: pausedEmails.length,
-    readyThisWeek: warmingEmails.filter(e => {
-      const readyDate = new Date(e.warmupReadyDate);
-      const weekFromNow = new Date();
-      weekFromNow.setDate(weekFromNow.getDate() + 7);
-      return readyDate <= weekFromNow;
-    }).length,
-  };
+    // Compute days warming stats for active accounts
+    const activeAccounts = [...ready, ...onTrack, ...needsAttention];
+    const avgDays = activeAccounts.length > 0
+      ? Math.round(activeAccounts.reduce((sum, a) => sum + a.daysActive, 0) / activeAccounts.length)
+      : 0;
+    const minDays = activeAccounts.length > 0 ? Math.min(...activeAccounts.map(a => a.daysActive)) : 0;
+    const maxDays = activeAccounts.length > 0 ? Math.max(...activeAccounts.map(a => a.daysActive)) : 0;
 
-  // Loading state
+    return { ready, onTrack, needsAttention, noData, inactive, total: accounts.length, avgDays, minDays, maxDays };
+  }, [accounts]);
+
+  function MetricPill({ label, value, target, pass }: { label: string; value: string; target: string; pass: boolean | "warn" }) {
+    const color = pass === true
+      ? "text-green-700 bg-green-100 border-green-200"
+      : pass === "warn"
+        ? "text-yellow-700 bg-yellow-100 border-yellow-200"
+        : "text-red-700 bg-red-100 border-red-200";
+    return (
+      <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap border ${color}`}>
+        {label} <span className="font-bold">{value}</span>
+        {pass !== true && <span className="opacity-60"> / {target}</span>}
+      </span>
+    );
+  }
+
+  function AccountRow({ account }: { account: WarmupAccount }) {
+    const config = VERDICT_CONFIG[account.verdict];
+    const wu = account.warmupStats;
+    const hasSends = wu && wu.warmupEmailsSent > 0;
+
+    // Determine pass/fail for each metric
+    const daysPass = account.daysActive >= MIN_WARMUP_DAYS ? true : false;
+    const scorePass = hasSends ? (wu.warmupScore >= 90 ? true : wu.warmupScore >= 50 ? "warn" as const : false) : null;
+    const replyPass = hasSends ? (wu.warmupReplyRate >= 20 ? true : wu.warmupReplyRate >= 10 ? "warn" as const : false) : null;
+
+    // Days warming context
+    const days = account.daysActive;
+    const daysLabel = days < 7 ? "< 1 week" : days < 14 ? "~1 week" : days < 30 ? `${Math.floor(days / 7)} weeks` : `${Math.floor(days / 30)}mo ${days % 30}d`;
+
+    return (
+      <div className={`flex items-center justify-between p-3 rounded-lg ${config.bg} border ${config.border}`}>
+        <div className="min-w-0 flex-1 flex items-center gap-3">
+          {/* Days warming - prominent */}
+          <div className="text-center flex-shrink-0 w-14">
+            <div className="text-lg font-bold text-gray-900 leading-tight">{days}</div>
+            <div className="text-[10px] text-gray-400 leading-tight">days</div>
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-gray-900 truncate">{account.email}</div>
+            <div className="text-xs text-gray-500">
+              {daysLabel} warming · Since {formatDate(account.createdAt)}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 ml-3">
+          {hasSends ? (
+            <>
+              {!daysPass && (
+                <MetricPill label="Days" value={`${account.daysActive}`} target={`${MIN_WARMUP_DAYS}`} pass={false} />
+              )}
+              <MetricPill label="Score" value={String(wu.warmupScore)} target="90" pass={scorePass!} />
+              <MetricPill label="Reply" value={`${wu.warmupReplyRate}%`} target="20%" pass={replyPass!} />
+            </>
+          ) : (
+            <span className="text-xs text-gray-400">{account.verdictReasons[0]}</span>
+          )}
+          <Badge className={`text-xs ${config.badgeClass}`}>{config.label}</Badge>
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="p-4 lg:p-8">
-        <div className="mb-6 lg:mb-8">
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Warmup Calendar</h1>
-          <p className="text-gray-500 mt-1 text-sm lg:text-base">Track email warmup progress and readiness</p>
+        <div className="mb-6">
+          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Warmup Status</h1>
+          <p className="text-gray-500 mt-1 text-sm">Checking warmup health across all accounts...</p>
         </div>
         <div className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto mb-4"></div>
-            <p className="text-gray-500">Loading warmup data...</p>
-          </div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto" />
         </div>
       </div>
     );
@@ -227,180 +336,161 @@ export default function WarmupPage() {
 
   return (
     <div className="p-4 lg:p-8">
-      <div className="mb-6 lg:mb-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Warmup Calendar</h1>
-            <p className="text-gray-500 mt-1 text-sm lg:text-base">Track email warmup progress and readiness</p>
-            <p className="text-gray-500 mt-1 text-sm">New email accounts need a 30-day warmup period before sending at full volume. Bison gradually increases sending so email providers learn to trust the account.</p>
+      {/* Header */}
+      <div className="mb-6">
+        <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Warmup Status</h1>
+        <p className="text-gray-500 mt-1 text-sm">
+          An account is ready when it hits all three benchmarks. Stats from last 7 days.
+        </p>
+        {/* Benchmarks bar */}
+        <div className="flex flex-wrap items-center gap-3 mt-3 p-3 rounded-lg bg-gray-50 border border-gray-200">
+          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Benchmarks:</span>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-green-500" />
+            <span className="text-sm text-gray-700">Score <span className="font-semibold">90+</span></span>
           </div>
-          {usingMockData && (
-            <Badge variant="outline" className="text-xs text-orange-600 border-orange-300">
-              Demo Data
-            </Badge>
-          )}
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-green-500" />
+            <span className="text-sm text-gray-700">Reply Rate <span className="font-semibold">20%+</span></span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-green-500" />
+            <span className="text-sm text-gray-700">Days Warming <span className="font-semibold">15+</span></span>
+          </div>
+          <span className="text-xs text-gray-400 ml-auto">All three = Ready to Go Live</span>
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4 mb-4 lg:mb-6">
-        <Card>
-          <CardContent className="pt-4 lg:pt-6 px-3 lg:px-6 pb-3 lg:pb-6">
-            <div className="text-xl lg:text-2xl font-bold text-green-600">{stats.ready.toLocaleString()}</div>
-            <div className="text-xs lg:text-sm text-gray-500 flex items-center">Ready for Use<InfoTooltip text="These accounts have completed warmup and can send at full volume." /></div>
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
+        <Card className="border-2 border-gray-300">
+          <CardContent className="pt-5 px-4 pb-4">
+            <div className="text-2xl font-bold text-gray-900">{groups.avgDays}<span className="text-base font-normal text-gray-400">d</span></div>
+            <div className="text-xs text-gray-500 flex items-center gap-1">
+              Avg. Days Warming
+              <InfoTooltip text={`Range: ${groups.minDays}d – ${groups.maxDays}d across ${groups.ready.length + groups.onTrack.length + groups.needsAttention.length} active accounts.`} />
+            </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-4 lg:pt-6 px-3 lg:px-6 pb-3 lg:pb-6">
-            <div className="text-xl lg:text-2xl font-bold text-orange-600">{stats.warming.toLocaleString()}</div>
-            <div className="text-xs lg:text-sm text-gray-500 flex items-center">Warming<InfoTooltip text="These accounts are still building reputation. Don't send campaigns from them yet." /></div>
+          <CardContent className="pt-5 px-4 pb-4">
+            <div className="text-2xl font-bold text-green-600">{groups.ready.length}</div>
+            <div className="text-xs text-gray-500 flex items-center gap-1">
+              Ready to Go Live
+              <InfoTooltip text="Score 90+, reply rate 20%+, low bounces. These accounts have healthy warmup and can be used for campaigns." />
+            </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-4 lg:pt-6 px-3 lg:px-6 pb-3 lg:pb-6">
-            <div className="text-xl lg:text-2xl font-bold text-blue-600">{stats.readyThisWeek}</div>
-            <div className="text-xs lg:text-sm text-gray-500">Ready This Week</div>
+          <CardContent className="pt-5 px-4 pb-4">
+            <div className="text-2xl font-bold text-blue-600">{groups.onTrack.length}</div>
+            <div className="text-xs text-gray-500 flex items-center gap-1">
+              On Track
+              <InfoTooltip text="Warmup is progressing but not all thresholds are met yet. Keep warming — don't use for campaigns yet." />
+            </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-4 lg:pt-6 px-3 lg:px-6 pb-3 lg:pb-6">
-            <div className="text-xl lg:text-2xl font-bold text-gray-400">{stats.paused}</div>
-            <div className="text-xs lg:text-sm text-gray-500 flex items-center">Paused<InfoTooltip text="Warmup is paused on these accounts — they are not building reputation while paused." /></div>
+          <CardContent className="pt-5 px-4 pb-4">
+            <div className="text-2xl font-bold text-red-600">{groups.needsAttention.length}</div>
+            <div className="text-xs text-gray-500 flex items-center gap-1">
+              Needs Attention
+              <InfoTooltip text="Two or more metrics are bad (low score, low reply rate, or high bounces). Investigate these accounts." />
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 px-4 pb-4">
+            <div className="text-2xl font-bold text-gray-400">{groups.noData.length + groups.inactive.length}</div>
+            <div className="text-xs text-gray-500 flex items-center gap-1">
+              No Data / Off
+              <InfoTooltip text={`${groups.noData.length} with no warmup activity, ${groups.inactive.length} paused or disconnected.`} />
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Warmup Progress Visualization */}
-      <Card className="mb-4 lg:mb-6">
-        <CardHeader className="px-4 lg:px-6">
-          <CardTitle className="text-base lg:text-lg flex items-center">30-Day Warmup Schedule<InfoTooltip text="Daily limits increase over 30 days: 5/day (Days 1-5) → 10/day (Days 6-10) → 20/day (Days 11-20) → 35/day (Days 21-29) → 50/day (Day 30+, ready for campaigns)." /></CardTitle>
-        </CardHeader>
-        <CardContent className="px-4 lg:px-6">
-          <div className="space-y-3 lg:space-y-4">
-            {/* Day progression */}
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <div className="flex justify-between sm:block w-full sm:w-20">
-                <span className="text-xs lg:text-sm text-gray-500">Days 1-5</span>
-                <span className="text-xs text-gray-500 sm:hidden">{warmingEmails.filter(e => e.warmupDay <= 5).length} emails</span>
-              </div>
-              <div className="flex-1 h-6 lg:h-8 bg-orange-100 rounded-lg relative overflow-hidden">
-                <div className="absolute inset-0 flex items-center px-2 lg:px-4">
-                  <span className="text-xs font-medium text-orange-800 truncate">5/day</span>
-                </div>
-              </div>
-              <div className="hidden sm:block w-16 text-xs lg:text-sm text-gray-500 text-right">
-                {warmingEmails.filter(e => e.warmupDay <= 5).length} emails
-              </div>
-            </div>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <div className="flex justify-between sm:block w-full sm:w-20">
-                <span className="text-xs lg:text-sm text-gray-500">Days 6-10</span>
-                <span className="text-xs text-gray-500 sm:hidden">{warmingEmails.filter(e => e.warmupDay > 5 && e.warmupDay <= 10).length} emails</span>
-              </div>
-              <div className="flex-1 h-6 lg:h-8 bg-orange-200 rounded-lg relative overflow-hidden">
-                <div className="absolute inset-0 flex items-center px-2 lg:px-4">
-                  <span className="text-xs font-medium text-orange-800 truncate">10/day</span>
-                </div>
-              </div>
-              <div className="hidden sm:block w-16 text-xs lg:text-sm text-gray-500 text-right">
-                {warmingEmails.filter(e => e.warmupDay > 5 && e.warmupDay <= 10).length} emails
-              </div>
-            </div>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <div className="flex justify-between sm:block w-full sm:w-20">
-                <span className="text-xs lg:text-sm text-gray-500">Days 11-20</span>
-                <span className="text-xs text-gray-500 sm:hidden">{warmingEmails.filter(e => e.warmupDay > 10 && e.warmupDay <= 20).length} emails</span>
-              </div>
-              <div className="flex-1 h-6 lg:h-8 bg-yellow-200 rounded-lg relative overflow-hidden">
-                <div className="absolute inset-0 flex items-center px-2 lg:px-4">
-                  <span className="text-xs font-medium text-yellow-800 truncate">20/day</span>
-                </div>
-              </div>
-              <div className="hidden sm:block w-16 text-xs lg:text-sm text-gray-500 text-right">
-                {warmingEmails.filter(e => e.warmupDay > 10 && e.warmupDay <= 20).length} emails
-              </div>
-            </div>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <div className="flex justify-between sm:block w-full sm:w-20">
-                <span className="text-xs lg:text-sm text-gray-500">Days 21-29</span>
-                <span className="text-xs text-gray-500 sm:hidden">{warmingEmails.filter(e => e.warmupDay > 20 && e.warmupDay < 30).length} emails</span>
-              </div>
-              <div className="flex-1 h-6 lg:h-8 bg-green-200 rounded-lg relative overflow-hidden">
-                <div className="absolute inset-0 flex items-center px-2 lg:px-4">
-                  <span className="text-xs font-medium text-green-800 truncate">35/day</span>
-                </div>
-              </div>
-              <div className="hidden sm:block w-16 text-xs lg:text-sm text-gray-500 text-right">
-                {warmingEmails.filter(e => e.warmupDay > 20 && e.warmupDay < 30).length} emails
-              </div>
-            </div>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <div className="flex justify-between sm:block w-full sm:w-20">
-                <span className="text-xs lg:text-sm text-gray-500">Day 30+</span>
-                <span className="text-xs text-gray-500 sm:hidden">{readyEmails.length.toLocaleString()} emails</span>
-              </div>
-              <div className="flex-1 h-6 lg:h-8 bg-green-500 rounded-lg relative overflow-hidden">
-                <div className="absolute inset-0 flex items-center px-2 lg:px-4">
-                  <span className="text-xs font-medium text-white truncate">50/day ✓</span>
-                </div>
-              </div>
-              <div className="hidden sm:block w-16 text-xs lg:text-sm text-gray-500 text-right">
-                {readyEmails.length.toLocaleString()} emails
-              </div>
-            </div>
+      {/* Ready to Go Live */}
+      {groups.ready.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-2">
+            <h2 className="text-sm font-semibold text-green-700">Ready to Go Live ({groups.ready.length})</h2>
+            <InfoTooltip text="All three metrics are healthy. These accounts can start sending campaigns." />
           </div>
-        </CardContent>
-      </Card>
+          <div className="grid gap-2">
+            {groups.ready.map(account => <AccountRow key={account.id} account={account} />)}
+          </div>
+        </div>
+      )}
 
-      {/* Upcoming Ready Dates */}
-      <Card>
-        <CardHeader className="px-4 lg:px-6">
-          <CardTitle className="text-base lg:text-lg">Upcoming Ready Dates</CardTitle>
-        </CardHeader>
-        <CardContent className="px-4 lg:px-6">
-          {sortedDates.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              {readyEmails.length > 0 
-                ? "All emails are warmed up and ready!" 
-                : "No emails currently warming up"}
+      {/* On Track */}
+      {groups.onTrack.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-2">
+            <h2 className="text-sm font-semibold text-blue-700">On Track ({groups.onTrack.length})</h2>
+            <InfoTooltip text="Warmup is progressing but one metric needs improvement. Keep warming — don't use for campaigns yet." />
+          </div>
+          <div className="grid gap-2">
+            {groups.onTrack.map(account => <AccountRow key={account.id} account={account} />)}
+          </div>
+        </div>
+      )}
+
+      {/* Needs Attention */}
+      {groups.needsAttention.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-2">
+            <h2 className="text-sm font-semibold text-red-700">Needs Attention ({groups.needsAttention.length})</h2>
+            <InfoTooltip text="Two or more warmup metrics are bad. These accounts may have deliverability issues — investigate before using." />
+          </div>
+          <div className="grid gap-2">
+            {groups.needsAttention.map(account => <AccountRow key={account.id} account={account} />)}
+          </div>
+        </div>
+      )}
+
+      {/* No Data */}
+      {groups.noData.length > 0 && (
+        <div className="mb-6">
+          <details>
+            <summary className="cursor-pointer list-none">
+              <div className="flex items-center gap-2 mb-2">
+                <h2 className="text-sm font-semibold text-gray-500">No Warmup Data ({groups.noData.length})</h2>
+                <InfoTooltip text="Connected with warmup enabled, but no warmup sends recorded in the last 7 days." />
+                <span className="text-gray-400 text-xs">click to expand</span>
+              </div>
+            </summary>
+            <div className="grid gap-2">
+              {groups.noData.map(account => <AccountRow key={account.id} account={account} />)}
             </div>
-          ) : (
-            <div className="space-y-2 lg:space-y-3">
-              {sortedDates.slice(0, 10).map(date => {
-                const dateEmails = upcomingByDate[date];
-                const formattedDate = new Date(date).toLocaleDateString('en-US', {
-                  weekday: 'short',
-                  month: 'short',
-                  day: 'numeric'
-                });
-                
-                return (
-                  <div key={date} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 lg:p-4 bg-gray-50 rounded-lg gap-2">
-                    <div>
-                      <div className="font-medium text-sm lg:text-base">{formattedDate}</div>
-                      <div className="text-xs lg:text-sm text-gray-500">
-                        {dateEmails.length} email{dateEmails.length !== 1 ? 's' : ''} will be ready
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-1 sm:max-w-xs lg:max-w-md sm:justify-end">
-                      {dateEmails.slice(0, 3).map(email => (
-                        <Badge key={email.id} variant="outline" className="text-xs">
-                          {email.domain}
-                        </Badge>
-                      ))}
-                      {dateEmails.length > 3 && (
-                        <Badge variant="outline" className="text-xs">
-                          +{dateEmails.length - 3} more
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+          </details>
+        </div>
+      )}
+
+      {/* Paused / Disconnected */}
+      {groups.inactive.length > 0 && (
+        <div className="mb-6">
+          <details>
+            <summary className="cursor-pointer list-none">
+              <div className="flex items-center gap-2 mb-2">
+                <h2 className="text-sm font-semibold text-gray-500">Paused & Disconnected ({groups.inactive.length})</h2>
+                <InfoTooltip text="These accounts are not building warmup reputation." />
+                <span className="text-gray-400 text-xs">click to expand</span>
+              </div>
+            </summary>
+            <div className="grid gap-2">
+              {groups.inactive.map(account => <AccountRow key={account.id} account={account} />)}
             </div>
-          )}
-        </CardContent>
-      </Card>
+          </details>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {accounts.length === 0 && (
+        <div className="text-center py-12 text-gray-500">
+          No sender accounts found. Add accounts in Bison to get started.
+        </div>
+      )}
     </div>
   );
 }
