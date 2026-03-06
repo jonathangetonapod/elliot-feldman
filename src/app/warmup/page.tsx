@@ -90,17 +90,7 @@ function getVerdict(
     problems++;
   }
 
-  // Reply rate check: 20%+ is good
-  if (wu.warmupReplyRate >= 20) {
-    reasons.push(`${wu.warmupReplyRate}% reply rate (good)`);
-  } else if (wu.warmupReplyRate >= 10) {
-    reasons.push(`${wu.warmupReplyRate}% reply rate (needs improvement)`);
-  } else {
-    reasons.push(`${wu.warmupReplyRate}% reply rate (low)`);
-    problems++;
-  }
-
-  if (problems === 0 && daysActive >= MIN_WARMUP_DAYS && wu.warmupScore >= 90 && wu.warmupReplyRate >= 20) {
+  if (problems === 0 && daysActive >= MIN_WARMUP_DAYS && wu.warmupScore >= 90) {
     return { verdict: "ready", reasons };
   } else if (problems >= 2) {
     return { verdict: "needs-attention", reasons };
@@ -280,7 +270,6 @@ export default function WarmupPage() {
     // Determine pass/fail for each metric
     const daysPass = account.daysActive >= MIN_WARMUP_DAYS ? true : false;
     const scorePass = hasSends ? (wu.warmupScore >= 90 ? true : wu.warmupScore >= 50 ? "warn" as const : false) : null;
-    const replyPass = hasSends ? (wu.warmupReplyRate >= 20 ? true : wu.warmupReplyRate >= 10 ? "warn" as const : false) : null;
 
     // Days warming context
     const days = account.daysActive;
@@ -309,7 +298,6 @@ export default function WarmupPage() {
                 <MetricPill label="Days" value={`${account.daysActive}`} target={`${MIN_WARMUP_DAYS}`} pass={false} />
               )}
               <MetricPill label="Score" value={String(wu.warmupScore)} target="90" pass={scorePass!} />
-              <MetricPill label="Reply" value={`${wu.warmupReplyRate}%`} target="20%" pass={replyPass!} />
             </>
           ) : (
             <span className="text-xs text-gray-400">{account.verdictReasons[0]}</span>
@@ -351,13 +339,9 @@ export default function WarmupPage() {
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-green-500" />
-            <span className="text-sm text-gray-700">Reply Rate <span className="font-semibold">20%+</span></span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-green-500" />
             <span className="text-sm text-gray-700">Days Warming <span className="font-semibold">15+</span></span>
           </div>
-          <span className="text-xs text-gray-400 ml-auto">All three = Ready to Go Live</span>
+          <span className="text-xs text-gray-400 ml-auto">Both = Ready to Go Live</span>
         </div>
       </div>
 
